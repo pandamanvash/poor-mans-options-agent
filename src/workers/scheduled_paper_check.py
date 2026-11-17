@@ -1,0 +1,178 @@
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from src.config.settings import ExecutionMode
+from src.db.models import ExecutionIntent, Trade
+from src.db.session import LightweightSession, _build_engine, get_db_session, init_db
+from src.mcp_clients.robinhood import DEFAULT_MCP_ACCOUNT_NUMBER, RobinhoodClient
+from src.mcp_clients.tradingview import TradingViewClient
+from src.mcp_clients.unusual_whales import UnusualWhalesClient
+from src.ml_engine.model_trainer import WeeklyModelTrainer
+from src.workers.execution_worker import ExecutionWorker
+from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInput
+from src.workers.screener_job import ScreenerJob
+
+
+def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any]:
+    """
+    Executes a scheduled local paper-trading cycle against the default Robinhood 'MCP' account (512500422)
+    and logs telemetry to data/paper_live_ledger.jsonl and reports/latest_paper_status.md.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    db_url = "sqlite:///./data/options_agent_paper.db"
+    sim_engine = _build_engine(db_url)
+    init_db(sim_engine)
+
+    def make_session() -> LightweightSession:
+        return LightweightSession(database_url=sim_engine.database_url, store=sim_engine.store)
+
+    uw_client = UnusualWhalesClient()
+    tv_client = TradingViewClient()
+    rh_client = RobinhoodClient(account_number=DEFAULT_MCP_ACCOUNT_NUMBER)
+    screener = ScreenerJob(uw_client=uw_client, tv_client=tv_client, rh_client=rh_client)
+    exec_worker = ExecutionWorker(
+        rh_client=rh_client,
+        tv_client=tv_client,
+        execution_mode=ExecutionMode.PAPER,
+    )
+    monitor = PositionMonitorWorker(
+        jsonl_path=Path("data/stress_events.jsonl"),
+    )
+
+    with get_db_session(make_session) as session:
+        screen_res = screener.run_pipeline(session=session)
+        intents = session.query(ExecutionIntent).filter(ExecutionIntent.status == "QUEUED").all()
+        filled_trades: list[dict[str, Any]] = []
+        for intent in intents:
+            tr = exec_worker.execute_queued_intent(
+                session=session,
+                intent=intent,
+                simulated_fill_step=1,
+                step_decrement=0.01,
+            )
+            if tr is not None:
+                filled_trades.append(
+                    {
+                        "ticker": tr.ticker,
+                        "strategy": tr.strategy,
+                        "expiration_date": tr.expiration_date,
+                        "strikes": f"${tr.short_strike:.0f}/${tr.long_strike:.0f}",
+                        "contracts": tr.contracts,
+                        "entry_credit": tr.entry_credit,
+                        "target_close_50pct": tr.target_close_price,
+                        "gtc_order_id": tr.gtc_order_id,
+                    }
+                )
+
+        # Evaluate open paper trades through the Loose-First + VIX + ML Monitor
+        open_trades = session.query(Trade).filter(Trade.status == "OPEN").all()
+        monitor_checks: list[dict[str, Any]] = []
+        vix_snap = tv_client.get_vix_snapshot()
+        for tr in open_trades:
+            tech = tv_client.get_technical_structure(tr.ticker)
+            flow = uw_client.get_flow_snapshot(tr.ticker)
+            pos_input = PositionStressInput(
+                ticker=tr.ticker,
+                strategy=tr.strategy,
+                contracts=tr.contracts,
+                dte=tr.dte_at_entry,
+                short_delta=tr.short_delta,
+                spread_mark=tr.current_mark,
+                entry_credit=tr.entry_credit,
+                tv_1h_close=tech.last_1h_close,
+                tv_sr_level=tr.tv_sr_anchor,
+                atr_14=tr.atr_14,
+                tv_4h_rsi=tech.rsi_4h,
+                uw_darkpool_net_flow_1h=flow.darkpool_net_flow_1h,
+                uw_darkpool_zscore=flow.darkpool_flow_zscore,
+                uw_sweep_ratio=flow.ask_sweep_ratio,
+                vix_level=vix_snap.vix_price,
+                vix3m_level=vix_snap.vix3m_price,
+                vix_zscore_20d=vix_snap.vix_zscore_20d,
+                vix_4h_rsi=vix_snap.vix_4h_rsi,
+                vix_1h_slope=vix_snap.vix_1h_slope,
+            )
+            decision = monitor.poll_and_log(session=session, pos=pos_input, trade=tr)
+            monitor_checks.append(
+                {
+                    "ticker": tr.ticker,
+                    "strategy": tr.strategy,
+                    "short_delta": tr.short_delta,
+                    "spread_mark": tr.current_mark,
+                    "action": decision.action,
+                    "polling_interval_seconds": decision.polling_interval_seconds,
+                    "rationale": decision.rationale,
+                }
+            )
+
+        ml_result = None
+        if mode == "friday_ml_retrain":
+            trainer = WeeklyModelTrainer()
+            ml_result = trainer.run_weekly_calibration(session=session)
+
+    cycle_payload = {
+        "timestamp_utc": now_iso,
+        "cycle_mode": mode,
+        "execution_mode": "PAPER",
+        "account": rh_client.get_portfolio_summary(),
+        "vix_regime": screen_res["vix_regime"],
+        "vix_summary": screen_res["vix_summary"],
+        "paper_trades_active": filled_trades,
+        "monitor_decisions": monitor_checks,
+        "ml_calibration": ml_result,
+    }
+
+    ledger_path = Path("data/paper_live_ledger.jsonl")
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(cycle_payload) + "\n")
+
+    status_md = Path("reports/latest_paper_status.md")
+    status_md.parent.mkdir(parents=True, exist_ok=True)
+    status_md.write_text(
+        "\n".join(
+            [
+                f"# Latest Scheduled Paper-Trading Status (`{now_iso}`)",
+                "",
+                f"- **Cycle Mode:** `{mode}` (`EXECUTION_MODE=PAPER`)",
+                f"- **Robinhood Account:** `MCP` (`••••{DEFAULT_MCP_ACCOUNT_NUMBER[-4:]}`)",
+                f"- **Active VIX Regime:** `{screen_res['vix_regime']}` — {screen_res['vix_summary']}",
+                f"- **Post-Allocation Buying Power:** `${rh_client.buying_power:,.2f}`",
+                "",
+                "## Active Paper Positions & Monitor Status",
+                "",
+                "| Ticker | Strategy | Strikes | Contracts | Entry Credit | 50% GTC Target | Monitor Action | Polling Interval |",
+                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                *[
+                    f"| **{t['ticker']}** | `{t['strategy']}` | `{t['strikes']}` | {t['contracts']}x | "
+                    f"`${t['entry_credit']:.2f}` | `${t['target_close_50pct']:.2f}` | "
+                    f"`{m['action']}` | `{m['polling_interval_seconds']}s` |"
+                    for t, m in zip(filled_trades, monitor_checks)
+                ],
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return cycle_payload
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Scheduled Paper-Trading Check Runner")
+    parser.add_argument(
+        "--mode",
+        choices=["screener", "monitor", "monitor_and_screen", "friday_ml_retrain"],
+        default="monitor_and_screen",
+    )
+    args = parser.parse_args()
+    res = run_scheduled_paper_cycle(mode=args.mode)
+    print(json.dumps(res, indent=2))
+
+
+if __name__ == "__main__":
+    main()
