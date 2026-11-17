@@ -150,12 +150,34 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
             [
                 f"# Latest Scheduled Paper-Trading Status (`{now_iso}`)",
                 "",
-                f"- **Cycle Mode:** `{mode}` (`EXECUTION_MODE=PAPER`)",
-                f"- **Robinhood Account:** `MCP` (`••••{DEFAULT_MCP_ACCOUNT_NUMBER[-4:]}`)",
+                f"- **Cycle Mode:** `{mode}` (`EXECUTION_MODE=PAPER`, `paper_execution_broker=alpaca`)",
+                f"- **Alpaca Paper Account:** `PA35XZXE8ZZE` (`paper=true`) | **Robinhood Default:** `MCP` (`••••{DEFAULT_MCP_ACCOUNT_NUMBER[-4:]}`)",
                 f"- **Active VIX Regime:** `{screen_res['vix_regime']}` — {screen_res['vix_summary']}",
                 f"- **Post-Allocation Buying Power:** `${rh_client.buying_power:,.2f}`",
                 "",
-                "## Active Paper Positions & Monitor Status",
+                "## 1. Potential Trades Summary (Screener Scan)",
+                "",
+                "### Qualifying Candidates",
+                "",
+                "| Ticker | Strategy | Exp (DTE) | Strikes | Contracts | Mid Credit | 50% GTC Target | Collateral |",
+                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                *[
+                    f"| **{q['ticker']}** | `{q['strategy']}` | `{q['expiration_date']}` ({q['dte']}d) | "
+                    f"`${q['short_strike']:.0f}/${q['long_strike']:.0f}` | {q['contracts']}x | "
+                    f"`${q['mid_credit']:.2f}` | `+${q['expected_50pct_profit_usd']:.2f}` | `${q['collateral_locked_usd']:.2f}` |"
+                    for q in screen_res.get("queued_intents", [])
+                ],
+                "",
+                "### Rejected / Filtered Candidates",
+                "",
+                "| Candidate | Rejection Reason |",
+                "| :--- | :--- |",
+                *[
+                    f"| `{r['key']}` | {r['reason']} |"
+                    for r in screen_res.get("rejected_candidates", [])
+                ],
+                "",
+                "## 2. Active Paper Positions & Monitor Status",
                 "",
                 "| Ticker | Strategy | Strikes | Contracts | Entry Credit | 50% GTC Target | Monitor Action | Polling Interval |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
@@ -164,6 +186,40 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
                     f"`${t['entry_credit']:.2f}` | `${t['target_close_50pct']:.2f}` | "
                     f"`{m['action']}` | `{m['polling_interval_seconds']}s` |"
                     for t, m in zip(filled_trades, monitor_checks)
+                ],
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    potential_md = Path("reports/potential_trades_summary.md")
+    potential_md.write_text(
+        "\n".join(
+            [
+                f"# Potential Trades Scan Summary (`{now_iso}`)",
+                "",
+                f"- **VIX Regime:** `{screen_res['vix_regime']}` (`VIX/VIX3M={screen_res['term_structure_ratio']}`)",
+                f"- **Qualifying Trades:** `{screen_res['queued_intents_count']}` | **Filtered Out:** `{len(screen_res.get('rejected_candidates', []))}`",
+                "",
+                "## Qualifying Potential Trades",
+                "",
+                "| Ticker | Strategy | Exp (DTE) | Strikes | Contracts | Mid Credit | 50% Target Profit | Collateral |",
+                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                *[
+                    f"| **{q['ticker']}** | `{q['strategy']}` | `{q['expiration_date']}` ({q['dte']}d) | "
+                    f"`${q['short_strike']:.0f}/${q['long_strike']:.0f}` | {q['contracts']}x | "
+                    f"`${q['mid_credit']:.2f}` | `+${q['expected_50pct_profit_usd']:.2f}` | `${q['collateral_locked_usd']:.2f}` |"
+                    for q in screen_res.get("queued_intents", [])
+                ],
+                "",
+                "## Filtered / Rejected Candidates",
+                "",
+                "| Candidate | Reason |",
+                "| :--- | :--- |",
+                *[
+                    f"| `{r['key']}` | {r['reason']} |"
+                    for r in screen_res.get("rejected_candidates", [])
                 ],
                 "",
             ]
