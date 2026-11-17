@@ -14,6 +14,7 @@ from src.mcp_clients.tradingview import TradingViewClient
 from src.mcp_clients.unusual_whales import UnusualWhalesClient
 from src.ml_engine.kpi_tracker import StrategyKPITracker
 from src.ml_engine.model_trainer import WeeklyModelTrainer
+from src.ml_engine.trade_journal import TradeJournalLogger
 from src.workers.execution_worker import ExecutionWorker
 from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInput
 from src.workers.screener_job import ScreenerJob
@@ -116,6 +117,9 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
             trainer = WeeklyModelTrainer()
             ml_result = trainer.run_weekly_calibration(session=session)
 
+        journal = TradeJournalLogger()
+        journal.record_trades_from_session(session=session)
+
     cycle_payload = {
         "timestamp_utc": now_iso,
         "cycle_mode": mode,
@@ -135,7 +139,9 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
 
     kpi_tracker = StrategyKPITracker(ledger_path=ledger_path)
     kpi_summary = kpi_tracker.compute_and_save_kpis()
+    journal_report = TradeJournalLogger().generate_report(kpi_snapshot=kpi_summary)
     cycle_payload["kpi_summary"] = kpi_summary["core_kpis"]
+    cycle_payload["trade_journal_summary"] = journal_report
 
     status_md = Path("reports/latest_paper_status.md")
     status_md.parent.mkdir(parents=True, exist_ok=True)

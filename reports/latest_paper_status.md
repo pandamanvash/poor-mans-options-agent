@@ -1,6 +1,6 @@
-# Latest Scheduled Paper-Trading Status (`2026-11-17T07:31:57.947774+00:00`)
+# Latest Scheduled Paper-Trading Status (`2026-11-17T07:40:30.813710+00:00`)
 
-- **Cycle Mode:** `monitor_and_screen` (`EXECUTION_MODE=PAPER`)
+- **Cycle Mode:** `friday_ml_retrain` (`EXECUTION_MODE=PAPER`)
 - **Robinhood Account:** `MCP` (`••••0422`)
 - **Active VIX Regime:** `REGIME_3_ELEVATED_FEAR` — Elevated Fear / Prime Credit Harvesting (VIX=22.91, VIX3M=23.02, Ratio=0.995, 4H_RSI=65.4, ExhaustionSignal=True).
 - **Post-Allocation Buying Power:** `$2,620.86`

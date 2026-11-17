@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from src.config.portfolio_rules import PORTFOLIO_CONSTRAINTS, scale_vertical_contracts
+from src.config.portfolio_rules import (
+    DEFAULT_STRATEGY_VERSION,
+    PORTFOLIO_CONSTRAINTS,
+    evaluate_ml_entry_expectancy,
+    get_dynamic_equity_tier,
+    get_strategy_profile,
+    scale_vertical_contracts,
+)
 from src.db.models import ExecutionIntent, Trade
 from src.mcp_clients.robinhood import RobinhoodClient, SpreadCandidateQuote
 from src.mcp_clients.tradingview import TradingViewClient, VixRegime
@@ -25,11 +32,11 @@ def build_idempotency_key(
 
 class ScreenerJob:
     """
-    4-Step Multi-MCP Screening & VIX Regime Pipeline:
-      Step 1: CBOE:VIX & CBOE:VIX3M Master Regime Filter (TradingView MCP)
-      Step 2: Institutional Flow & 40-Day Earnings Hazard Filter (Unusual Whales MCP)
-      Step 3: Technical Structure & Strike Anchoring (TradingView MCP)
-      Step 4: Option Chain Liquidity, >=$100 50%-Target Scaling & Queue Execution Intent
+    Multi-Version 4-Step Multi-MCP Screening & VIX Regime Pipeline (v0 -> v5):
+      Step 1: CBOE:VIX & CBOE:VIX3M Master Regime Filter + v1 Term-Structure Velocity Guard
+      Step 2: Institutional Flow, Dark-Pool Z-Score Confirmation & 40-Day Earnings Filter
+      Step 3: Technical Structure, ATR Cushion & Strike Anchoring
+      Step 4: Dynamic Equity-Tier Slot Scaling (v2+), Credit/Width & ML Plateau Gate (v5)
     """
 
     def __init__(
@@ -37,17 +44,25 @@ class ScreenerJob:
         uw_client: UnusualWhalesClient | None = None,
         tv_client: TradingViewClient | None = None,
         rh_client: RobinhoodClient | None = None,
+        version: str = DEFAULT_STRATEGY_VERSION,
     ) -> None:
         self.uw = uw_client or UnusualWhalesClient()
         self.tv = tv_client or TradingViewClient()
         self.rh = rh_client or RobinhoodClient()
+        self.version = version.lower().strip()
+        self.profile = get_strategy_profile(self.version)
 
     def run_pipeline(
         self,
-        session: Session,
+        session: Any,
         trade_date: str = "2026-11-16",
+        version: str | None = None,
     ) -> dict[str, Any]:
+        active_version = (version or self.version).lower().strip()
+        profile = get_strategy_profile(active_version)
+
         # Step 1: VIX & VIX3M Master Regime Filter
+        vix_snapshot = self.tv.get_vix_snapshot()
         vix_analysis = self.tv.analyze_vix_regime()
         panic_regime = vix_analysis.regime == VixRegime.REGIME_4_PANIC_BACKWARDATION
 
@@ -55,15 +70,19 @@ class ScreenerJob:
         account_value = float(portfolio["total_value"])
         available_cash = float(portfolio["buying_power"])
 
+        # Step 1B (Loop 2 / v2+): Dynamic Equity-Tier Slot Scaling
+        equity_tier = get_dynamic_equity_tier(account_value=account_value, version=active_version)
+        max_vertical_slots = int(equity_tier["max_active_vertical_spreads"])
+
         open_verticals = (
             session.query(Trade)
             .filter(
                 Trade.status == "OPEN",
-                Trade.strategy.in_(["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD"]),
+                Trade.strategy.in_(["BULL_PUT_SPREAD", "BEAR_CALL_SPREAD", "IRON_CONDOR"]),
             )
             .count()
         )
-        slots_available = max(0, PORTFOLIO_CONSTRAINTS.max_active_vertical_spreads - open_verticals)
+        slots_available = max(0, max_vertical_slots - open_verticals)
 
         queued_intents: list[ExecutionIntent] = []
         rejected_candidates: list[dict[str, str]] = []
@@ -87,14 +106,59 @@ class ScreenerJob:
                 )
                 continue
 
+            # Loop 1 (v1+): Regime Term-Structure Slope Velocity Guard for Bull Puts
+            if (
+                profile.enable_regime_slope_filter
+                and strategy == "BULL_PUT_SPREAD"
+                and vix_analysis.term_structure_ratio > profile.max_bull_put_vix_term_ratio
+                and vix_snapshot.vix_1h_slope > profile.max_bull_put_vix_1h_slope
+                and not vix_analysis.vix_exhaustion_bull_put_signal
+            ):
+                rejected_candidates.append(
+                    {
+                        "key": key,
+                        "reason": (
+                            f"Loop 1 Term-Structure Guard ({active_version}): "
+                            f"VIX/VIX3M={vix_analysis.term_structure_ratio:.3f} > {profile.max_bull_put_vix_term_ratio:.2f} "
+                            f"with rising 1H slope={vix_snapshot.vix_1h_slope:+.2f} and no exhaustion wick"
+                        ),
+                    }
+                )
+                continue
+
             # Step 2: Institutional Flow & 40-Day Earnings Filter (Unusual Whales MCP)
             if strategy == "BULL_PUT_SPREAD":
-                uw_ok, uw_reason = self.uw.validate_bull_put_flow(ticker)
+                uw_ok, uw_reason = self.uw.validate_bull_put_flow(
+                    ticker, min_iv_rank=profile.iv_rank_min
+                )
             else:
-                uw_ok, uw_reason = self.uw.validate_bear_call_flow(ticker)
+                uw_ok, uw_reason = self.uw.validate_bear_call_flow(
+                    ticker, min_iv_rank=profile.iv_rank_min
+                )
 
             if not uw_ok:
                 rejected_candidates.append({"key": key, "reason": f"UW Filter: {uw_reason}"})
+                continue
+
+            flow_snap = self.uw.get_flow_snapshot(ticker)
+            aligned_dp_zscore = (
+                flow_snap.darkpool_flow_zscore
+                if strategy == "BULL_PUT_SPREAD"
+                else -flow_snap.darkpool_flow_zscore
+            )
+            if (
+                profile.enable_regime_slope_filter
+                and aligned_dp_zscore < profile.min_darkpool_flow_zscore_entry
+            ):
+                rejected_candidates.append(
+                    {
+                        "key": key,
+                        "reason": (
+                            f"Loop 1 Dark-Pool Z-Score Guard ({active_version}): "
+                            f"aligned DP Z={aligned_dp_zscore:.2f} < {profile.min_darkpool_flow_zscore_entry:.2f}"
+                        ),
+                    }
+                )
                 continue
 
             # Step 3: Technical Structure & Strike Anchoring (TradingView MCP)
@@ -111,16 +175,52 @@ class ScreenerJob:
                 rejected_candidates.append({"key": key, "reason": f"TV Filter: {tv_reason}"})
                 continue
 
-            # Step 4: Validate Option Liquidity, 1/3 Width & >$100 Profit Floor Scaling
+            tech = self.tv.get_technical_structure(ticker)
+            if strategy == "BULL_PUT_SPREAD":
+                dist_to_sr_atr = round(
+                    (tech.horizontal_support_poc - candidate.short_leg.strike_price)
+                    / max(0.01, tech.atr_14),
+                    4,
+                )
+            else:
+                dist_to_sr_atr = round(
+                    (candidate.short_leg.strike_price - tech.horizontal_resistance_ceiling)
+                    / max(0.01, tech.atr_14),
+                    4,
+                )
+
+            # Loop 5 (v5): Pre-Entry ML Counterfactual Expectancy Gate
+            credit_to_width = round(candidate.mid_credit / max(0.01, candidate.spread_width), 4)
+            ml_ok, ml_win_prob, ml_reason = evaluate_ml_entry_expectancy(
+                iv_rank=flow_snap.iv_rank,
+                short_delta=candidate.short_leg.delta,
+                credit_to_width=credit_to_width,
+                vix_term_ratio=vix_analysis.term_structure_ratio,
+                vix_1h_slope=vix_snapshot.vix_1h_slope,
+                uw_darkpool_zscore=aligned_dp_zscore,
+                uw_sweep_ratio=flow_snap.ask_sweep_ratio,
+                dist_to_sr_atr=dist_to_sr_atr,
+                version=active_version,
+            )
+            if not ml_ok:
+                rejected_candidates.append({"key": key, "reason": ml_reason})
+                continue
+
+            # Step 4: Validate Option Liquidity, 1/3 Width & Dynamic Profit Floor Scaling
             intent = self._evaluate_and_queue_candidate(
                 session=session,
                 candidate=candidate,
                 vix_regime=vix_analysis.regime.value,
-                rationale=f"{vix_analysis.summary} | UW: {uw_reason} | TV: {tv_reason}",
+                rationale=(
+                    f"[{active_version.upper()}|{equity_tier['tier_name']}] "
+                    f"{vix_analysis.summary} | UW: {uw_reason} | TV: {tv_reason} | {ml_reason}"
+                ),
                 account_value=account_value,
                 available_cash=available_cash,
                 panic_regime=panic_regime,
                 trade_date=trade_date,
+                version=active_version,
+                ml_win_prob=ml_win_prob,
             )
             if intent is not None:
                 queued_intents.append(intent)
@@ -131,6 +231,9 @@ class ScreenerJob:
                 )
 
         return {
+            "strategy_version": active_version,
+            "equity_tier": equity_tier["tier_name"],
+            "max_vertical_slots": max_vertical_slots,
             "vix_regime": vix_analysis.regime.value,
             "vix_summary": vix_analysis.summary,
             "term_structure_ratio": vix_analysis.term_structure_ratio,
@@ -156,7 +259,7 @@ class ScreenerJob:
 
     def _evaluate_and_queue_candidate(
         self,
-        session: Session,
+        session: Any,
         candidate: SpreadCandidateQuote,
         vix_regime: str,
         rationale: str,
@@ -164,8 +267,14 @@ class ScreenerJob:
         available_cash: float,
         panic_regime: bool,
         trade_date: str,
+        version: str = DEFAULT_STRATEGY_VERSION,
+        ml_win_prob: float | None = None,
     ) -> ExecutionIntent | None:
-        if not (PORTFOLIO_CONSTRAINTS.vertical_min_dte <= candidate.dte <= PORTFOLIO_CONSTRAINTS.vertical_max_dte):
+        if not (
+            PORTFOLIO_CONSTRAINTS.vertical_min_dte
+            <= candidate.dte
+            <= PORTFOLIO_CONSTRAINTS.vertical_max_dte
+        ):
             return None
         if candidate.net_bid_ask_spread > PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd:
             return None
@@ -177,6 +286,8 @@ class ScreenerJob:
                 account_value=account_value,
                 current_cash=available_cash,
                 panic_regime=panic_regime,
+                version=version,
+                ml_win_prob=ml_win_prob,
             )
         except ValueError:
             return None

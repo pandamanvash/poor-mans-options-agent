@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-0 m-0">
+  <div class="py-2 space-y-2.5">
+    <!-- Top Header & Horizon Controls -->
+    <div class="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--card-border)]">
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-2 h-2 rounded-full bg-[var(--success)]"></span>
+        <span class="text-xs font-semibold tracking-tight">MCP Account (••••0422) • Scheduled Paper Telemetry</span>
+        <span class="text-xs px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--card-border)] text-[var(--muted-foreground)] font-mono">VIX 22.91 (Regime 3)</span>
+      </div>
+      <div class="flex items-center gap-1 text-xs" role="group">
+        <button id="btn-90d" onclick="setHorizon('90d')" class="px-2 py-1 rounded font-medium bg-[var(--primary)] text-[var(--primary-foreground)] transition">Last 90D</button>
+        <button id="btn-30d" onclick="setHorizon('30d')" class="px-2 py-1 rounded font-medium bg-[var(--card)] text-[var(--muted-foreground)] border border-[var(--card-border)] transition">Last 30D</button>
+        <button id="btn-week" onclick="setHorizon('week')" class="px-2 py-1 rounded font-medium bg-[var(--card)] text-[var(--muted-foreground)] border border-[var(--card-border)] transition">This Week (Paper)</button>
+      </div>
+    </div>
+
+    <!-- 6 Compact KPI Strip Cards -->
+    <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 text-xs">
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">Net P&amp;L (Policy D)</div>
+        <div id="kpi-pnl" class="font-mono font-bold text-sm text-[var(--success)]">+$1,693.00</div>
+        <div id="kpi-ret" class="text-[var(--muted-foreground)] font-mono">+33.86% on $5k</div>
+      </div>
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">Win Rate</div>
+        <div id="kpi-win" class="font-mono font-bold text-sm">85.71%</div>
+        <div id="kpi-wl" class="text-[var(--muted-foreground)] font-mono">12W / 2L (14)</div>
+      </div>
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">Profit Factor</div>
+        <div id="kpi-pf" class="font-mono font-bold text-sm">7.32x</div>
+        <div id="kpi-sharpe" class="text-[var(--muted-foreground)] font-mono">Sharpe 8.42</div>
+      </div>
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">Max Drawdown</div>
+        <div id="kpi-dd" class="font-mono font-bold text-sm text-[var(--warning)]">-2.33%</div>
+        <div id="kpi-dd-usd" class="text-[var(--muted-foreground)] font-mono">-$136.00 (&lt;6% cap)</div>
+      </div>
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">Idle Cash Floor</div>
+        <div id="kpi-cash" class="font-mono font-bold text-sm">51.8% avg</div>
+        <div id="kpi-cash-min" class="text-[var(--muted-foreground)] font-mono">43.2% min (&ge;40%)</div>
+      </div>
+      <div class="p-2 rounded bg-[var(--card)] border border-[var(--card-border)]">
+        <div class="text-[var(--muted-foreground)]">ML + Loose Alpha</div>
+        <div id="kpi-alpha" class="font-mono font-bold text-sm text-[var(--success)]">+$1,138.00</div>
+        <div id="kpi-saves" class="text-[var(--muted-foreground)] font-mono">4 Vega / 2 Cut saves</div>
+      </div>
+    </div>
+
+    <!-- Canvas Chart Area -->
+    <div class="pt-1">
+      <div class="flex items-center justify-between text-xs mb-1">
+        <span id="chart-title" class="font-medium text-[var(--muted-foreground)]">Cumulative Portfolio Equity ($5,000 Base) — Policy D vs. Competing Exit Policies</span>
+        <div class="flex items-center gap-3 text-xs">
+          <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#10b981"></span>Policy D (Active ML+Loose)</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#3b82f6"></span>Policy B (Loose Only)</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#f59e0b"></span>Policy C (21d Roll)</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-2.5 h-2.5 rounded-sm" style="background:#ef4444"></span>Policy A (Tight 0.40&Delta;)</span>
+        </div>
+      </div>
+      <canvas id="equityCanvas" height="195" class="w-full block"></canvas>
+    </div>
+
+    <!-- Bottom Schedule Bar -->
+    <div class="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[var(--card-border)] text-xs text-[var(--muted-foreground)]">
+      <span><strong class="text-[var(--foreground)]">Active Cron Daemons:</strong> Screener <code class="font-mono">45 6,9 * * 1-5</code> PT &bull; Monitor <code class="font-mono">*/15 6-13 * * 1-5</code> PT &bull; Friday ML <code class="font-mono">30 13 * * 5</code> PT</span>
+      <span class="font-mono text-[var(--foreground)]">Open Paper: 2x AMZN $250/$245P &bull; 2x AAPL $365/$370C</span>
+    </div>
+  </div>
+
+  <script>
+    const DATASETS = {
+      "90d": {
+        pnl: "+$1,693.00",
+        ret: "+33.86% on $5k",
+        win: "85.71%",
+        wl: "12W / 2L (14)",
+        pf: "7.32x",
+        sharpe: "Sharpe 8.42",
+        dd: "-2.33%",
+        ddUsd: "-$136.00 (<6% cap)",
+        cash: "51.8% avg",
+        cashMin: "43.2% min (≥40%)",
+        alpha: "+$1,138.00",
+        saves: "4 Vega / 2 Cut saves",
+        labels: ["Start","T1 AMZN","T2 AAPL","T3 TSLA","T4 META","T5 AMZN","T6 META","T7 AAPL","T8 TSLA","T9 AMZN","T10 META","T11 AAPL","T12 TSLA","T13 AMZN","T14 AAPL"],
+        policyD: [5000, 5158, 5343, 5507, 5667, 5535, 5697, 5867, 6027, 6189, 6347, 6503, 6367, 6535, 6693],
+        policyB: [5000, 5158, 5343, 5507, 5667, 5383, 5545, 5715, 5875, 6037, 6195, 6351, 6055, 6223, 6381],
+        policyC: [5000, 5158, 5343, 5418, 5578, 5388, 5550, 5720, 5795, 5870, 6028, 6103, 5898, 6066, 6224],
+        policyA: [5000, 5158, 5343, 5211, 5371, 5245, 5407, 5577, 5453, 5319, 5477, 5357, 5229, 5397, 5555]
+      },
+      "30d": {
+        pnl: "+$666.00",
+        ret: "+13.32% on $5k",
+        win: "83.33%",
+        wl: "5W / 1L (6)",
+        pf: "5.90x",
+        sharpe: "Sharpe 7.83",
+        dd: "-2.48%",
+        ddUsd: "-$136.00 (<6% cap)",
+        cash: "54.2% avg",
+        cashMin: "46.4% min (≥40%)",
+        alpha: "+$564.00",
+        saves: "2 Vega / 1 Cut save",
+        labels: ["Oct 17","T9 AMZN","T10 META","T11 AAPL","T12 TSLA","T13 AMZN","T14 AAPL"],
+        policyD: [5000, 5162, 5320, 5476, 5340, 5508, 5666],
+        policyB: [5000, 5162, 5320, 5476, 5180, 5348, 5506],
+        policyC: [5000, 5075, 5233, 5308, 5103, 5271, 5429],
+        policyA: [5000, 4866, 5024, 4904, 4776, 4944, 5102]
+      },
+      "week": {
+        pnl: "+$314.00",
+        ret: "+$221 net w/ TSM",
+        win: "100% new",
+        wl: "2W / 1L w/ TSM",
+        pf: "3.38x",
+        sharpe: "Sharpe 6.95",
+        dd: "-1.79%",
+        ddUsd: "-$93.00 (TSM exit)",
+        cash: "50.4% avg",
+        cashMin: "$2,621 BP free",
+        alpha: "+$286.00",
+        saves: "1 AMZN Vega save",
+        labels: ["Mon Open","Mon TSM Cut","Wed Hold","Thu AMZN Vega","Fri AMZN 50%","Fri AAPL 50%"],
+        policyD: [5208, 5115, 5165, 5190, 5271, 5429],
+        policyB: [5208, 4998, 5048, 5080, 5236, 5394],
+        policyC: [5208, 5060, 5095, 5110, 5185, 5343],
+        policyA: [5208, 5115, 5140, 5008, 5008, 5166]
+      }
+    };
+
+    let currentHorizon = "90d";
+
+    function setHorizon(h) {
+      currentHorizon = h;
+      ["90d", "30d", "week"].forEach(id => {
+        const btn = document.getElementById("btn-" + id);
+        if (id === h) {
+          btn.className = "px-2 py-1 rounded font-medium bg-[var(--primary)] text-[var(--primary-foreground)] transition";
+        } else {
+          btn.className = "px-2 py-1 rounded font-medium bg-[var(--card)] text-[var(--muted-foreground)] border border-[var(--card-border)] transition";
+        }
+      });
+      const d = DATASETS[h];
+      document.getElementById("kpi-pnl").textContent = d.pnl;
+      document.getElementById("kpi-ret").textContent = d.ret;
+      document.getElementById("kpi-win").textContent = d.win;
+      document.getElementById("kpi-wl").textContent = d.wl;
+      document.getElementById("kpi-pf").textContent = d.pf;
+      document.getElementById("kpi-sharpe").textContent = d.sharpe;
+      document.getElementById("kpi-dd").textContent = d.dd;
+      document.getElementById("kpi-dd-usd").textContent = d.ddUsd;
+      document.getElementById("kpi-cash").textContent = d.cash;
+      document.getElementById("kpi-cash-min").textContent = d.cashMin;
+      document.getElementById("kpi-alpha").textContent = d.alpha;
+      document.getElementById("kpi-saves").textContent = d.saves;
+      drawChart();
+    }
+
+    function drawChart() {
+      const canvas = document.getElementById("equityCanvas");
+      if (!canvas) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const width = rect.width || 680;
+      const height = 195;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+
+      const styles = getComputedStyle(document.documentElement);
+      const isLight = document.documentElement.classList.contains("light");
+      const gridColor = isLight ? "rgba(0,0,0,0.08)" : "rgba(255,255,255,0.08)";
+      const textColor = styles.getPropertyValue("--muted-foreground").trim() || (isLight ? "#555" : "#9ca3af");
+
+      const data = DATASETS[currentHorizon];
+      const allVals = [...data.policyD, ...data.policyB, ...data.policyC, ...data.policyA];
+      const minVal = Math.floor((Math.min(...allVals) - 80) / 100) * 100;
+      const maxVal = Math.ceil((Math.max(...allVals) + 80) / 100) * 100;
+
+      const padL = 52, padR = 16, padT = 12, padB = 26;
+      const plotW = width - padL - padR;
+      const plotH = height - padT - padB;
+
+      ctx.clearRect(0, 0, width, height);
+
+      // Horizontal grid lines
+      ctx.strokeStyle = gridColor;
+      ctx.fillStyle = textColor;
+      ctx.font = "11px monospace";
+      ctx.lineWidth = 1;
+      const steps = 4;
+      for (let i = 0; i <= steps; i++) {
+        const val = minVal + ((maxVal - minVal) * i) / steps;
+        const y = padT + plotH - (plotH * i) / steps;
+        ctx.beginPath();
+        ctx.moveTo(padL, y);
+        ctx.lineTo(width - padR, y);
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.fillText("$" + Math.round(val).toLocaleString(), padL - 6, y + 3);
+      }
+
+      // X-axis labels
+      const n = data.labels.length;
+      ctx.textAlign = "center";
+      for (let i = 0; i < n; i++) {
+        if (n > 8 && i % 2 !== 0 && i !== n - 1) continue;
+        const x = padL + (plotW * i) / (n - 1);
+        ctx.fillText(data.labels[i], x, height - 6);
+      }
+
+      function plotSeries(arr, color, lineWidth, dashed) {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        if (dashed) ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        for (let i = 0; i < arr.length; i++) {
+          const x = padL + (plotW * i) / (arr.length - 1);
+          const y = padT + plotH - ((arr[i] - minVal) / (maxVal - minVal)) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // Draw points for Policy D
+        if (!dashed) {
+          ctx.fillStyle = color;
+          for (let i = 0; i < arr.length; i++) {
+            const x = padL + (plotW * i) / (arr.length - 1);
+            const y = padT + plotH - ((arr[i] - minVal) / (maxVal - minVal)) * plotH;
+            ctx.beginPath();
+            ctx.arc(x, y, 2.8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+
+      plotSeries(data.policyA, "#ef4444", 1.5, true);
+      plotSeries(data.policyC, "#f59e0b", 1.5, true);
+      plotSeries(data.policyB, "#3b82f6", 1.8, false);
+      plotSeries(data.policyD, "#10b981", 2.6, false);
+    }
+
+    window.addEventListener("resize", drawChart);
+    window.addEventListener("themechange", drawChart);
+    setTimeout(drawChart, 30);
+  </script>
+</body>
+</html>

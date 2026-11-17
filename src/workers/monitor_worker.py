@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.config.portfolio_rules import DEFAULT_STRATEGY_VERSION, get_strategy_profile
 from src.config.settings import settings
 from src.db.models import StressEvent, Trade
 
@@ -31,10 +32,19 @@ class PositionStressInput:
     vix_zscore_20d: float
     vix_4h_rsi: float
     vix_1h_slope: float
+    prev_short_delta: float | None = None
+    days_held: int = 7
+    version: str = DEFAULT_STRATEGY_VERSION
 
     @property
     def unrealized_pnl_usd(self) -> float:
         return round((self.entry_credit - self.spread_mark) * 100.0 * self.contracts, 2)
+
+    @property
+    def delta_velocity_1d(self) -> float:
+        if self.prev_short_delta is None:
+            return 0.0
+        return round(abs(self.short_delta) - abs(self.prev_short_delta), 4)
 
     @property
     def vix_term_structure_ratio(self) -> float:
@@ -55,7 +65,7 @@ class PositionStressInput:
 
 @dataclass(frozen=True)
 class MonitorDecision:
-    action: str  # "NORMAL_HOLD", "HOLD_LOOSE", "HOLD_LOOSE_PHANTOM_VEGA", "HOLD_LOOSE_VIX_EXHAUSTION", "EARLY_CUT_ML_OVERRIDE", "HARD_STOP_EXIT", "21_DTE_ROLL"
+    action: str  # "NORMAL_HOLD", "HOLD_LOOSE", "HOLD_LOOSE_PHANTOM_VEGA", "HOLD_LOOSE_VIX_EXHAUSTION", "EARLY_CUT_ML_OVERRIDE", "EARLY_CUT_DELTA_VELOCITY", "14_DTE_GAMMA_SHIELD", "FAST_42PCT_TAKE_PROFIT", "TREND_RUNNER_65PCT_HARVEST", "HARD_STOP_EXIT", "21_DTE_ROLL"
     polling_interval_seconds: int  # 300s normal, 60s when short_delta >= 0.38
     tv_1h_close_breach: bool
     is_stress_event: bool
@@ -64,24 +74,39 @@ class MonitorDecision:
 
 class PositionMonitorWorker:
     """
-    Intra-Week Risk Management: "Loose-First + VIX + Hard Structural Stop" (monitor_worker.py)
+    Multi-Version Intra-Week Risk & Profit Harvesting Engine (`v0` -> `v5`):
+      - Loose-First + VIX + Hard Structural Stop (`v0`..`v5`)
+      - Loop 3 (`v3+`): Adaptive Delta-Velocity (`dDelta/dt`) Cut & 14-DTE Gamma Shield
+      - Loop 4 (`v4+`): Multi-Speed Velocity Take-Profit (`42%` Fast / `50%` Core / `62.5-65%` Trend Runner)
+      - Loop 5 (`v5`): Plateau-Calibrated Early Cut Threshold (`0.41` Delta)
     """
 
     def __init__(
         self,
         thresholds: dict[str, Any] | None = None,
         jsonl_path: Path | None = None,
+        version: str = DEFAULT_STRATEGY_VERSION,
     ) -> None:
         self.thresholds = thresholds or settings.load_risk_thresholds()
         self.jsonl_path = jsonl_path or settings.stress_events_jsonl_path
+        self.version = version.lower().strip()
 
-    def evaluate_position(self, pos: PositionStressInput) -> MonitorDecision:
+    def evaluate_position(
+        self,
+        pos: PositionStressInput,
+        version: str | None = None,
+    ) -> MonitorDecision:
+        active_version = (version or pos.version or self.version).lower().strip()
+        profile = get_strategy_profile(active_version)
+
         abs_delta = abs(pos.short_delta)
         stress_trigger = float(self.thresholds.get("stress_polling_delta_trigger", 0.38))
         delta_ceiling = float(self.thresholds.get("baseline_short_delta_ceiling", 0.52))
-        ml_early_cut_delta = float(self.thresholds.get("ml_early_cut_delta_ceiling", 0.43))
+        ml_early_cut_delta = float(
+            self.thresholds.get("ml_early_cut_delta_ceiling", profile.ml_early_cut_delta_ceiling)
+        )
         atr_buffer = float(self.thresholds.get("tv_1h_sr_atr_buffer", 0.15))
-        roll_dte = int(self.thresholds.get("roll_dte_trigger", 21))
+        roll_dte = int(self.thresholds.get("roll_dte_trigger", profile.roll_dte_trigger))
 
         polling_interval = 60 if abs_delta >= stress_trigger else 300
         is_stress = abs_delta >= stress_trigger
@@ -111,7 +136,32 @@ class PositionMonitorWorker:
                 rationale=" | ".join(reasons),
             )
 
-        # 2. Early Cut Override (Backwardation VIX/VIX3M > 1.0 OR Confirmed UW Institutional Breakout)
+        # 2. Loop 3 (v3+): Adaptive Delta-Velocity (dDelta/dt) Pre-Stop Cut
+        adverse_flow_direction = (
+            pos.uw_darkpool_net_flow_1h < 0
+            if pos.strategy == "BULL_PUT_SPREAD"
+            else pos.uw_darkpool_net_flow_1h > 0
+        )
+        if (
+            profile.enable_delta_velocity_shield
+            and pos.prev_short_delta is not None
+            and abs_delta >= profile.delta_velocity_min_abs_delta
+            and pos.delta_velocity_1d >= profile.delta_velocity_cut_trigger
+            and adverse_flow_direction
+        ):
+            return MonitorDecision(
+                action="EARLY_CUT_DELTA_VELOCITY",
+                polling_interval_seconds=60,
+                tv_1h_close_breach=tv_1h_breach,
+                is_stress_event=True,
+                rationale=(
+                    f"Loop 3 Delta-Velocity Shield ({active_version}): Short Delta {abs_delta:.2f} "
+                    f"expanded +{pos.delta_velocity_1d:.3f}/day (>= +{profile.delta_velocity_cut_trigger:.2f}) "
+                    f"with adverse dark-pool flow (${pos.uw_darkpool_net_flow_1h:,.0f}). Cutting before full stop."
+                ),
+            )
+
+        # 3. Early Cut Override (Backwardation VIX/VIX3M > 1.0 OR Confirmed UW Institutional Breakout)
         backwardation = pos.vix_term_structure_ratio > float(
             self.thresholds.get("vix_backwardation_ratio_trigger", 1.0)
         )
@@ -143,7 +193,7 @@ class PositionMonitorWorker:
             return MonitorDecision(
                 action="EARLY_CUT_ML_OVERRIDE",
                 polling_interval_seconds=polling_interval,
-                tv_1h_close_breach=tv_1h_breach,
+                tv_1h_close_breach=tv_1h_close_breach if "tv_1h_close_breach" in locals() else tv_1h_breach,
                 is_stress_event=is_stress,
                 rationale=(
                     f"Early Cut Override at {abs_delta:.2f} Delta (>= {ml_early_cut_delta:.2f}): "
@@ -151,7 +201,58 @@ class PositionMonitorWorker:
                 ),
             )
 
-        # 3. 21 DTE Roll Rule (if not yet at 50% profit target)
+        # 4. Loop 4 (v4+): Multi-Speed Velocity Profit Harvesting
+        if profile.enable_multispeed_profit_harvest and pos.entry_credit > 0:
+            captured_pct = (pos.entry_credit - pos.spread_mark) / pos.entry_credit
+            if (
+                pos.days_held <= profile.fast_profit_max_days
+                and captured_pct >= profile.fast_profit_target_pct
+            ):
+                return MonitorDecision(
+                    action="FAST_42PCT_TAKE_PROFIT",
+                    polling_interval_seconds=polling_interval,
+                    tv_1h_close_breach=False,
+                    is_stress_event=False,
+                    rationale=(
+                        f"Loop 4 Fast Velocity Harvest ({active_version}): Captured {captured_pct * 100:.1f}% "
+                        f"credit in {pos.days_held}d (<= {profile.fast_profit_max_days}d). Recycling buying power."
+                    ),
+                )
+            if (
+                abs_delta <= profile.runner_max_abs_delta
+                and pos.dist_to_tv_sr_atr >= 0.80
+                and captured_pct >= profile.runner_profit_target_pct
+            ):
+                return MonitorDecision(
+                    action="TREND_RUNNER_65PCT_HARVEST",
+                    polling_interval_seconds=polling_interval,
+                    tv_1h_close_breach=False,
+                    is_stress_event=False,
+                    rationale=(
+                        f"Loop 4 Trend-Runner Harvest ({active_version}): Captured {captured_pct * 100:.1f}% "
+                        f"at low gamma ({abs_delta:.2f} Delta, {pos.dist_to_tv_sr_atr:.2f} ATR cushion)."
+                    ),
+                )
+
+        # 5. Loop 3 (v3+): 14-DTE Gamma Shield Profit Lock
+        if (
+            profile.enable_delta_velocity_shield
+            and pos.dte <= profile.gamma_shield_dte_threshold
+            and pos.entry_credit > 0
+            and pos.spread_mark <= (pos.entry_credit * 0.65)
+        ):
+            return MonitorDecision(
+                action="14_DTE_GAMMA_SHIELD",
+                polling_interval_seconds=polling_interval,
+                tv_1h_close_breach=False,
+                is_stress_event=is_stress,
+                rationale=(
+                    f"Loop 3 Gamma Shield ({active_version}): {pos.ticker} at {pos.dte} DTE "
+                    f"(<= {profile.gamma_shield_dte_threshold} DTE) with >=35% credit captured. Locking profit."
+                ),
+            )
+
+        # 6. 21 DTE (or calibrated 18 DTE) Roll Rule (if not yet at 50% profit target)
         hit_50pct_profit = pos.spread_mark <= (pos.entry_credit * 0.50)
         if pos.dte <= roll_dte and not hit_50pct_profit:
             return MonitorDecision(
@@ -166,7 +267,7 @@ class PositionMonitorWorker:
                 ),
             )
 
-        # 4. Phantom Vega Protection (Bull Puts) & Spot-Up / VIX-Up Exhaustion (Bear Calls)
+        # 7. Phantom Vega Protection (Bull Puts) & Spot-Up / VIX-Up Exhaustion (Bear Calls)
         if is_stress:
             if (
                 pos.strategy == "BULL_PUT_SPREAD"
@@ -221,7 +322,7 @@ class PositionMonitorWorker:
 
     def poll_and_log(
         self,
-        session: Session,
+        session: Any,
         pos: PositionStressInput,
         trade: Trade | None = None,
     ) -> MonitorDecision:

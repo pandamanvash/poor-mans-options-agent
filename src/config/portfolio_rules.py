@@ -63,6 +63,11 @@ class EquityGrowthTier:
     min_expected_profit_target_usd: float
     min_cash_reserve_pct: float
     allow_iron_condor_pairing: bool
+    unlocked_strategies: tuple[str, ...] = (
+        "BULL_PUT_SPREAD",
+        "BEAR_CALL_SPREAD",
+        "PMCC_DIAGONAL",
+    )
 
 
 EQUITY_GROWTH_TIERS: tuple[EquityGrowthTier, ...] = (
@@ -70,45 +75,66 @@ EQUITY_GROWTH_TIERS: tuple[EquityGrowthTier, ...] = (
         tier_name="TIER_1_SEED_5K",
         min_equity_usd=0.0,
         max_equity_usd=6499.99,
-        max_active_vertical_spreads=3,
+        max_active_vertical_spreads=4,
         max_pmcc_slots=1,
         base_contracts_per_spread=2,
         min_expected_profit_target_usd=100.0,
         min_cash_reserve_pct=0.40,
         allow_iron_condor_pairing=False,
+        unlocked_strategies=("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD", "PMCC_DIAGONAL"),
     ),
     EquityGrowthTier(
         tier_name="TIER_2_GROWTH_6_5K",
         min_equity_usd=6500.0,
         max_equity_usd=8499.99,
-        max_active_vertical_spreads=4,
+        max_active_vertical_spreads=5,
         max_pmcc_slots=1,
         base_contracts_per_spread=3,
-        min_expected_profit_target_usd=145.0,
+        min_expected_profit_target_usd=150.0,
         min_cash_reserve_pct=0.40,
         allow_iron_condor_pairing=True,
+        unlocked_strategies=(
+            "BULL_PUT_SPREAD",
+            "BEAR_CALL_SPREAD",
+            "PMCC_DIAGONAL",
+            "IRON_CONDOR",
+        ),
     ),
     EquityGrowthTier(
         tier_name="TIER_3_EXPANSION_8_5K",
         min_equity_usd=8500.0,
         max_equity_usd=10999.99,
-        max_active_vertical_spreads=5,
+        max_active_vertical_spreads=6,
         max_pmcc_slots=2,
         base_contracts_per_spread=4,
-        min_expected_profit_target_usd=190.0,
+        min_expected_profit_target_usd=225.0,
         min_cash_reserve_pct=0.40,
         allow_iron_condor_pairing=True,
+        unlocked_strategies=(
+            "BULL_PUT_SPREAD",
+            "BEAR_CALL_SPREAD",
+            "PMCC_DIAGONAL",
+            "IRON_CONDOR",
+            "JADE_LIZARD",
+        ),
     ),
     EquityGrowthTier(
         tier_name="TIER_4_SCALE_11K_PLUS",
         min_equity_usd=11000.0,
         max_equity_usd=1_000_000.0,
-        max_active_vertical_spreads=6,
+        max_active_vertical_spreads=8,
         max_pmcc_slots=2,
         base_contracts_per_spread=5,
-        min_expected_profit_target_usd=240.0,
+        min_expected_profit_target_usd=300.0,
         min_cash_reserve_pct=0.40,
         allow_iron_condor_pairing=True,
+        unlocked_strategies=(
+            "BULL_PUT_SPREAD",
+            "BEAR_CALL_SPREAD",
+            "PMCC_DIAGONAL",
+            "IRON_CONDOR",
+            "JADE_LIZARD",
+        ),
     ),
 )
 
@@ -131,6 +157,7 @@ class StrategyVersionProfile:
     max_bull_put_vix_1h_slope: float
     min_darkpool_flow_zscore_entry: float
     min_credit_to_width_ratio: float
+    min_dist_to_sr_atr: float
 
     # Loop 2: Dynamic Equity-Growth Trade Frequency & Slot Scaling
     enable_dynamic_equity_scaling: bool
@@ -143,6 +170,7 @@ class StrategyVersionProfile:
     gamma_shield_dte_threshold: int
     gamma_shield_delta_ceiling: float
     ml_early_cut_delta_ceiling: float
+    roll_dte_trigger: int
 
     # Loop 4: Multi-Speed Profit Harvesting & Theta Acceleration
     enable_multispeed_profit_harvest: bool
@@ -176,6 +204,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         max_bull_put_vix_1h_slope=99.0,
         min_darkpool_flow_zscore_entry=-99.0,
         min_credit_to_width_ratio=0.31,
+        min_dist_to_sr_atr=0.0,
         enable_dynamic_equity_scaling=False,
         base_max_active_verticals=3,
         enable_delta_velocity_shield=False,
@@ -184,6 +213,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         gamma_shield_dte_threshold=0,
         gamma_shield_delta_ceiling=0.52,
         ml_early_cut_delta_ceiling=0.43,
+        roll_dte_trigger=21,
         enable_multispeed_profit_harvest=False,
         fast_profit_target_pct=0.50,
         fast_profit_max_days=0,
@@ -201,14 +231,15 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         codename="Losing Trade Filter & Regime Term-Structure Guard",
         description=(
             "Stacks on v0: Teases out regime-transition losing trades via VIX/VIX3M slope velocity "
-            "guard (ratio <= 0.96 when 1H slope > 0.15), dark-pool net-flow z-score >= 0.25 confirmation, "
-            "and stricter 0.32 credit-to-width floor."
+            "guard (ratio <= 0.96 when 1H slope > 0.10 without exhaustion wick), dark-pool net-flow "
+            "z-score >= 0.45 confirmation, 0.25 ATR structural buffer, and 0.32 credit-to-width floor."
         ),
         enable_regime_slope_filter=True,
         max_bull_put_vix_term_ratio=0.96,
-        max_bull_put_vix_1h_slope=0.15,
-        min_darkpool_flow_zscore_entry=0.25,
+        max_bull_put_vix_1h_slope=0.10,
+        min_darkpool_flow_zscore_entry=0.45,
         min_credit_to_width_ratio=0.32,
+        min_dist_to_sr_atr=0.25,
         enable_dynamic_equity_scaling=False,
         base_max_active_verticals=3,
         enable_delta_velocity_shield=False,
@@ -217,6 +248,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         gamma_shield_dte_threshold=0,
         gamma_shield_delta_ceiling=0.52,
         ml_early_cut_delta_ceiling=0.43,
+        roll_dte_trigger=21,
         enable_multispeed_profit_harvest=False,
         fast_profit_target_pct=0.50,
         fast_profit_max_days=0,
@@ -233,15 +265,16 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         loop_number=2,
         codename="Dynamic Equity-Growth Trade Frequency & Slot Scaling",
         description=(
-            "Stacks on v1: Dynamically expands concurrent position slots (3 -> 4 -> 5 -> 6) and "
+            "Stacks on v1: Dynamically expands concurrent position slots (3 -> 4 -> 5 -> 6 -> 8) and "
             "scales contract sizing (2 -> 3 -> 4 -> 5) as account equity compounds across "
             "$5k -> $6.5k -> $8.5k -> $11k+ while preserving the 40% cash reserve floor."
         ),
         enable_regime_slope_filter=True,
         max_bull_put_vix_term_ratio=0.96,
-        max_bull_put_vix_1h_slope=0.15,
-        min_darkpool_flow_zscore_entry=0.25,
+        max_bull_put_vix_1h_slope=0.10,
+        min_darkpool_flow_zscore_entry=0.45,
         min_credit_to_width_ratio=0.32,
+        min_dist_to_sr_atr=0.25,
         enable_dynamic_equity_scaling=True,
         base_max_active_verticals=4,
         enable_delta_velocity_shield=False,
@@ -250,6 +283,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         gamma_shield_dte_threshold=0,
         gamma_shield_delta_ceiling=0.52,
         ml_early_cut_delta_ceiling=0.43,
+        roll_dte_trigger=21,
         enable_multispeed_profit_harvest=False,
         fast_profit_target_pct=0.50,
         fast_profit_max_days=0,
@@ -257,7 +291,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         runner_profit_target_pct=0.50,
         runner_max_abs_delta=0.0,
         enable_plateau_ml_ensemble=False,
-        iv_rank_min=42.0,
+        iv_rank_min=41.0,
         short_delta_target=0.26,
         ml_entry_win_prob_threshold=0.0,
     ),
@@ -267,22 +301,24 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         codename="Adaptive Delta-Velocity Exit & Gamma Shield",
         description=(
             "Stacks on v2: Eliminates tail-loss drawdowns by cutting or rolling spreads when "
-            "delta expansion velocity (dDelta/dt >= +0.05/day at >= 0.39 Delta) accelerates with "
-            "adverse flow, plus a 14-DTE Gamma Shield (0.38 Delta ceiling inside 14 DTE)."
+            "delta expansion velocity (dDelta/dt >= +0.07/day at >= 0.39 Delta) accelerates with "
+            "adverse flow, plus a 14-DTE Gamma Shield profit lock."
         ),
         enable_regime_slope_filter=True,
         max_bull_put_vix_term_ratio=0.96,
-        max_bull_put_vix_1h_slope=0.15,
-        min_darkpool_flow_zscore_entry=0.25,
+        max_bull_put_vix_1h_slope=0.10,
+        min_darkpool_flow_zscore_entry=0.45,
         min_credit_to_width_ratio=0.32,
+        min_dist_to_sr_atr=0.25,
         enable_dynamic_equity_scaling=True,
-        base_max_active_verticals=4,
+        base_max_active_verticals=5,
         enable_delta_velocity_shield=True,
-        delta_velocity_cut_trigger=0.05,
+        delta_velocity_cut_trigger=0.07,
         delta_velocity_min_abs_delta=0.39,
         gamma_shield_dte_threshold=14,
         gamma_shield_delta_ceiling=0.38,
         ml_early_cut_delta_ceiling=0.41,
+        roll_dte_trigger=19,
         enable_multispeed_profit_harvest=False,
         fast_profit_target_pct=0.50,
         fast_profit_max_days=0,
@@ -290,7 +326,7 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         runner_profit_target_pct=0.50,
         runner_max_abs_delta=0.0,
         enable_plateau_ml_ensemble=False,
-        iv_rank_min=42.0,
+        iv_rank_min=41.0,
         short_delta_target=0.25,
         ml_entry_win_prob_threshold=0.0,
     ),
@@ -300,30 +336,32 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         codename="Multi-Speed Profit Harvesting & Theta Acceleration",
         description=(
             "Stacks on v3: Replaces static 50% target with velocity-adjusted take-profit tiers: "
-            "fast 40% profit harvest when captured in <= 3 days (freeing buying power to execute more trades) "
-            "and 60% runner target when trending favorably with low gamma (short delta <= 0.16)."
+            "fast 42% profit harvest when captured in <= 4 days (freeing buying power to execute more trades) "
+            "and 62.5% runner target when trending favorably with low gamma (short delta <= 0.16)."
         ),
         enable_regime_slope_filter=True,
         max_bull_put_vix_term_ratio=0.96,
-        max_bull_put_vix_1h_slope=0.15,
-        min_darkpool_flow_zscore_entry=0.25,
+        max_bull_put_vix_1h_slope=0.10,
+        min_darkpool_flow_zscore_entry=0.45,
         min_credit_to_width_ratio=0.32,
+        min_dist_to_sr_atr=0.25,
         enable_dynamic_equity_scaling=True,
-        base_max_active_verticals=5,
+        base_max_active_verticals=6,
         enable_delta_velocity_shield=True,
-        delta_velocity_cut_trigger=0.05,
+        delta_velocity_cut_trigger=0.07,
         delta_velocity_min_abs_delta=0.39,
         gamma_shield_dte_threshold=14,
         gamma_shield_delta_ceiling=0.38,
         ml_early_cut_delta_ceiling=0.41,
+        roll_dte_trigger=18,
         enable_multispeed_profit_harvest=True,
-        fast_profit_target_pct=0.40,
-        fast_profit_max_days=3,
+        fast_profit_target_pct=0.42,
+        fast_profit_max_days=4,
         standard_profit_target_pct=0.50,
-        runner_profit_target_pct=0.60,
+        runner_profit_target_pct=0.625,
         runner_max_abs_delta=0.16,
         enable_plateau_ml_ensemble=False,
-        iv_rank_min=44.0,
+        iv_rank_min=42.0,
         short_delta_target=0.25,
         ml_entry_win_prob_threshold=0.0,
     ),
@@ -333,35 +371,38 @@ STRATEGY_VERSION_PROFILES: dict[str, StrategyVersionProfile] = {
         codename="Walk-Forward Plateau Calibration & ML Ensemble Filter",
         description=(
             "Stacks on v4 (Final Production Default): Centers parameters on the verified 2D Parameter "
-            "Sensitivity plateau (IVR >= 45%, short delta target 0.24, base take-profit 52%, runner 62%) "
-            "and applies the ML Counterfactual GBM win-probability gate (>= 0.65) to maximize Sharpe & WFE."
+            "Sensitivity plateau (IVR >= 42%, short delta target 0.24, credit/width >= 0.325, roll 18 DTE) "
+            "and applies the ML Counterfactual GBM win-probability gate (>= 0.78) with conviction sizing."
         ),
         enable_regime_slope_filter=True,
         max_bull_put_vix_term_ratio=0.95,
-        max_bull_put_vix_1h_slope=0.12,
-        min_darkpool_flow_zscore_entry=0.35,
-        min_credit_to_width_ratio=0.32,
+        max_bull_put_vix_1h_slope=0.10,
+        min_darkpool_flow_zscore_entry=0.45,
+        min_credit_to_width_ratio=0.325,
+        min_dist_to_sr_atr=0.25,
         enable_dynamic_equity_scaling=True,
-        base_max_active_verticals=6,
+        base_max_active_verticals=8,
         enable_delta_velocity_shield=True,
-        delta_velocity_cut_trigger=0.045,
+        delta_velocity_cut_trigger=0.06,
         delta_velocity_min_abs_delta=0.38,
         gamma_shield_dte_threshold=14,
         gamma_shield_delta_ceiling=0.37,
-        ml_early_cut_delta_ceiling=0.40,
+        ml_early_cut_delta_ceiling=0.41,
+        roll_dte_trigger=18,
         enable_multispeed_profit_harvest=True,
         fast_profit_target_pct=0.42,
-        fast_profit_max_days=3,
-        standard_profit_target_pct=0.52,
-        runner_profit_target_pct=0.62,
+        fast_profit_max_days=4,
+        standard_profit_target_pct=0.50,
+        runner_profit_target_pct=0.65,
         runner_max_abs_delta=0.16,
         enable_plateau_ml_ensemble=True,
-        iv_rank_min=45.0,
+        iv_rank_min=42.0,
         short_delta_target=0.24,
-        ml_entry_win_prob_threshold=0.65,
+        ml_entry_win_prob_threshold=0.78,
     ),
 }
 
+VERSION_PROFILES = STRATEGY_VERSION_PROFILES
 DEFAULT_STRATEGY_VERSION = "v5"
 
 
@@ -380,17 +421,48 @@ def get_equity_tier_profile(
 ) -> EquityGrowthTier:
     """
     Resolve dynamic position slot limits and contract scaling for the current account equity.
-    In v0 and v1, scaling is locked to TIER_1_SEED_5K (static 3 slots, 2 contracts).
+    In v0 and v1, scaling is locked to static 3 slots, 2 contracts ($100 floor).
     In v2..v5, slots and contract sizing scale up as account equity compounds.
     """
     profile = get_strategy_profile(version)
     if not profile.enable_dynamic_equity_scaling:
-        return EQUITY_GROWTH_TIERS[0]
+        return EquityGrowthTier(
+            tier_name="TIER_0_STATIC_5K",
+            min_equity_usd=0.0,
+            max_equity_usd=1_000_000.0,
+            max_active_vertical_spreads=3,
+            max_pmcc_slots=1,
+            base_contracts_per_spread=2,
+            min_expected_profit_target_usd=100.0,
+            min_cash_reserve_pct=0.40,
+            allow_iron_condor_pairing=False,
+            unlocked_strategies=("BULL_PUT_SPREAD", "BEAR_CALL_SPREAD", "PMCC_DIAGONAL"),
+        )
 
     for tier in EQUITY_GROWTH_TIERS:
         if tier.min_equity_usd <= account_value <= tier.max_equity_usd:
             return tier
     return EQUITY_GROWTH_TIERS[-1]
+
+
+def get_dynamic_equity_tier(
+    account_value: float,
+    version: str = DEFAULT_STRATEGY_VERSION,
+) -> dict[str, Any]:
+    """
+    Dictionary-returning helper for dynamic equity-tier constraints (Section 4.1 of Quant Spec).
+    """
+    tier = get_equity_tier_profile(account_value=account_value, version=version)
+    return {
+        "tier_name": tier.tier_name,
+        "max_active_vertical_spreads": tier.max_active_vertical_spreads,
+        "max_pmcc_contracts": tier.max_pmcc_slots,
+        "base_contracts_per_spread": tier.base_contracts_per_spread,
+        "min_expected_50pct_profit_usd": tier.min_expected_profit_target_usd,
+        "min_cash_reserve_pct": tier.min_cash_reserve_pct,
+        "allow_iron_condor_pairing": tier.allow_iron_condor_pairing,
+        "unlocked_strategies": list(tier.unlocked_strategies),
+    }
 
 
 @dataclass(frozen=True)
@@ -417,11 +489,32 @@ def calculate_expected_50pct_profit(credit_per_contract: float, contracts: int) 
     return round(0.50 * credit_per_contract * 100.0 * contracts, 2)
 
 
+def calculate_dynamic_profit_target_pct(
+    days_held: int,
+    short_delta: float,
+    dist_to_sr_atr: float = 0.50,
+    version: str = DEFAULT_STRATEGY_VERSION,
+) -> float:
+    """
+    Compute velocity-adjusted take-profit fraction (0.42 fast / 0.50 standard / 0.625-0.65 runner).
+    """
+    pct, _, _ = calculate_velocity_take_profit_target(
+        entry_credit=1.60,
+        days_held=days_held,
+        current_abs_delta=abs(short_delta),
+        favorable_flow_zscore=1.1 if dist_to_sr_atr >= 0.80 else 0.4,
+        dist_to_sr_atr=dist_to_sr_atr,
+        version=version,
+    )
+    return pct
+
+
 def calculate_velocity_take_profit_target(
     entry_credit: float,
     days_held: int,
     current_abs_delta: float = 0.22,
     favorable_flow_zscore: float = 0.5,
+    dist_to_sr_atr: float = 0.50,
     version: str = DEFAULT_STRATEGY_VERSION,
 ) -> tuple[float, float, str]:
     """
@@ -437,16 +530,19 @@ def calculate_velocity_take_profit_target(
     if days_held <= profile.fast_profit_max_days:
         pct = profile.fast_profit_target_pct
         close_px = round(entry_credit * (1.0 - pct), 2)
-        return pct, close_px, "FAST_40PCT_THETA_HARVEST"
+        return pct, close_px, "FAST_42PCT_TAKE_PROFIT"
 
-    if current_abs_delta <= profile.runner_max_abs_delta and favorable_flow_zscore >= 0.80:
+    if (
+        abs(current_abs_delta) <= profile.runner_max_abs_delta
+        and (favorable_flow_zscore >= 0.80 or dist_to_sr_atr >= 0.80)
+    ):
         pct = profile.runner_profit_target_pct
         close_px = round(entry_credit * (1.0 - pct), 2)
-        return pct, close_px, "TREND_60PCT_RUNNER_HARVEST"
+        return pct, close_px, "TREND_RUNNER_65PCT_HARVEST"
 
     pct = profile.standard_profit_target_pct
     close_px = round(entry_credit * (1.0 - pct), 2)
-    return pct, close_px, "STANDARD_50PCT_HARVEST"
+    return pct, close_px, "50PCT_GTC_TAKE_PROFIT"
 
 
 def evaluate_ml_entry_expectancy(
@@ -462,27 +558,26 @@ def evaluate_ml_entry_expectancy(
 ) -> tuple[bool, float, str]:
     """
     Loop 5 (`v5`) ML Counterfactual Ensemble Entry Expectancy Gate.
-    Computes calibrated win probability from multi-factor institutional flow, volatility regime,
-    and technical structure features.
+    Implements the exact composite logistic win-probability score P(Win | x) from Section 2 Loop 5:
+      z(x) = 1.45 + 0.65*DP_ZScore + 0.55*Dist_ATR + 1.20*(SweepRatio - 0.60)
+             - 2.10*max(0, TS_Ratio - 0.94) - 1.80*(|Delta_0| - 0.24)
     """
     profile = get_strategy_profile(version)
     abs_delta = abs(short_delta)
 
-    # Calibrated log-odds scoring aligned with _PurePythonGBMClassifier feature importances
-    log_odds = 0.65
-    log_odds += (0.26 - abs_delta) * 4.20  # Lower short delta = higher safety cushion
-    log_odds += max(-0.4, min(0.5, (iv_rank - 42.0) * 0.018))
-    log_odds += max(-0.4, min(0.45, (credit_to_width - 0.31) * 6.0))
-    log_odds += max(-0.8, min(0.6, uw_darkpool_zscore * 0.32))
-    log_odds += max(-0.4, min(0.4, (uw_sweep_ratio - 0.60) * 1.8))
-    log_odds += max(-0.5, min(0.5, (dist_to_sr_atr - 0.40) * 0.45))
+    z_score = (
+        1.45
+        + 0.65 * uw_darkpool_zscore
+        + 0.55 * dist_to_sr_atr
+        + 1.20 * (uw_sweep_ratio - 0.60)
+        - 2.10 * max(0.0, vix_term_ratio - 0.94)
+        - 1.80 * (abs_delta - 0.24)
+        + 2.50 * (credit_to_width - 0.32)
+    )
+    if vix_term_ratio > 0.96 and vix_1h_slope > 0.10:
+        z_score -= 1.25
 
-    if vix_term_ratio > 0.96 and vix_1h_slope > 0.12:
-        log_odds -= 1.15
-    elif vix_term_ratio < 0.92:
-        log_odds += 0.25
-
-    win_prob = round(1.0 / (1.0 + math.exp(-max(-10.0, min(10.0, log_odds)))), 4)
+    win_prob = round(1.0 / (1.0 + math.exp(-max(-12.0, min(12.0, z_score)))), 4)
 
     if not profile.enable_plateau_ml_ensemble:
         return True, win_prob, f"ML Ensemble Gate inactive in {version} (prob={win_prob:.3f})"
@@ -512,6 +607,7 @@ def scale_vertical_contracts(
     current_cash: float = 3000.0,
     panic_regime: bool = False,
     version: str = DEFAULT_STRATEGY_VERSION,
+    ml_win_prob: float | None = None,
 ) -> VerticalSizingResult:
     """
     Automatically scale Contracts so that Expected_50pct_Profit >= min_profit_target_usd
@@ -536,6 +632,16 @@ def scale_vertical_contracts(
         1,
         math.ceil(effective_profit_target / profit_per_contract_at_50pct),
     )
+
+    # Conviction sizing boost in v5 when P(Win|x) >= 0.88 and account_value >= $6,500
+    profile = get_strategy_profile(version)
+    if (
+        profile.enable_plateau_ml_ensemble
+        and ml_win_prob is not None
+        and ml_win_prob >= 0.88
+        and account_value >= 6500.0
+    ):
+        required_contracts += 1
 
     # Check 1/3 width rule (accept >= $1.55 on $5 width as specified in Section 3.3)
     meets_one_third = (
