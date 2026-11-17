@@ -1,0 +1,84 @@
+services:
+  - type: worker
+    name: position-monitor-worker
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    dockerCommand: python -m src.workers.monitor_worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: options-agent-db
+          property: connectionString
+      - key: EXECUTION_MODE
+        value: PAPER
+      - key: UNUSUAL_WHALES_API_KEY
+        sync: false
+      - key: TRADINGVIEW_MCP_URL
+        sync: false
+      - key: ROBINHOOD_MCP_URL
+        sync: false
+      - key: WEBHOOK_NOTIFICATION_URL
+        sync: false
+
+  - type: worker
+    name: execution-worker
+    runtime: docker
+    plan: starter
+    autoDeploy: true
+    dockerCommand: python -m src.workers.execution_worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: options-agent-db
+          property: connectionString
+      - key: EXECUTION_MODE
+        value: PAPER
+      - key: ROBINHOOD_ACCOUNT_NUMBER
+        value: "512500422"
+      - key: ROBINHOOD_MCP_URL
+        sync: false
+      - key: WEBHOOK_NOTIFICATION_URL
+        sync: false
+
+  - type: cron
+    name: screener-cron
+    runtime: docker
+    plan: starter
+    schedule: "45 13,16 * * 1-5"
+    dockerCommand: python -m src.workers.screener_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: options-agent-db
+          property: connectionString
+      - key: EXECUTION_MODE
+        value: PAPER
+      - key: UNUSUAL_WHALES_API_KEY
+        sync: false
+      - key: TRADINGVIEW_MCP_URL
+        sync: false
+      - key: ROBINHOOD_MCP_URL
+        sync: false
+
+  - type: cron
+    name: friday-ml-backtest-cron
+    runtime: docker
+    plan: starter
+    schedule: "30 20 * * 5"
+    dockerCommand: python -m src.workers.ml_retrain_job
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: options-agent-db
+          property: connectionString
+      - key: EXECUTION_MODE
+        value: PAPER
+      - key: WEBHOOK_NOTIFICATION_URL
+        sync: false
+
+databases:
+  - name: options-agent-db
+    databaseName: options_agent
+    user: options_agent_user
+    plan: basic-256mb
