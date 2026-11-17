@@ -12,6 +12,7 @@ from src.db.session import LightweightSession, _build_engine, get_db_session, in
 from src.mcp_clients.robinhood import DEFAULT_MCP_ACCOUNT_NUMBER, RobinhoodClient
 from src.mcp_clients.tradingview import TradingViewClient
 from src.mcp_clients.unusual_whales import UnusualWhalesClient
+from src.ml_engine.kpi_tracker import StrategyKPITracker
 from src.ml_engine.model_trainer import WeeklyModelTrainer
 from src.workers.execution_worker import ExecutionWorker
 from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInput
@@ -131,6 +132,10 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
     with ledger_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(cycle_payload) + "\n")
+
+    kpi_tracker = StrategyKPITracker(ledger_path=ledger_path)
+    kpi_summary = kpi_tracker.compute_and_save_kpis()
+    cycle_payload["kpi_summary"] = kpi_summary["core_kpis"]
 
     status_md = Path("reports/latest_paper_status.md")
     status_md.parent.mkdir(parents=True, exist_ok=True)
