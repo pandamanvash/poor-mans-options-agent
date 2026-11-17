@@ -1,0 +1,14 @@
+{
+  "default_brokerage": "robinhood",
+  "default_account_nickname": "MCP",
+  "default_account_number": "512500422",
+  "rhs_account_number": "512500422",
+  "rhc_account_number": "311266158930",
+  "brokerage_account_type": "individual",
+  "trading_type": "limited_margin",
+  "option_level": "option_level_3",
+  "agentic_allowed": true,
+  "excluded_readonly_accounts": [
+    "542891403"
+  ]
+}

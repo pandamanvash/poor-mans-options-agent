@@ -4,6 +4,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+DEFAULT_MCP_ACCOUNT_NUMBER = "512500422"
+DEFAULT_MCP_ACCOUNT_NICKNAME = "MCP"
+
 
 @dataclass(frozen=True)
 class OptionLegQuote:
@@ -48,7 +51,6 @@ class SpreadCandidateQuote:
 
     @property
     def net_bid_ask_spread(self) -> float:
-        # Effective execution spread across the vertical package
         return round(
             max(0.05, (self.short_leg.bid_ask_spread + self.long_leg.bid_ask_spread) * 0.25),
             2,
@@ -64,13 +66,15 @@ class SimulatedOrder:
     order_type: str  # "ENTRY_LIMIT", "GTC_TAKE_PROFIT", "DEFENSIVE_EXIT", "DEFENSIVE_ROLL"
     limit_price: float
     contracts: int
+    account_number: str = DEFAULT_MCP_ACCOUNT_NUMBER
+    account_nickname: str = DEFAULT_MCP_ACCOUNT_NICKNAME
     status: str = "OPEN"  # "OPEN", "FILLED", "CANCELLED"
     filled_price: float | None = None
     steps_walked: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-# Live Robinhood MCP option quotes captured 2026-11-16 (Account ••••0422)
+# Live Robinhood MCP option quotes captured 2026-11-16 (MCP Account ••••0422)
 LIVE_RH_SPREAD_CANDIDATES: dict[str, SpreadCandidateQuote] = {
     "AMZN_BULL_PUT": SpreadCandidateQuote(
         ticker="AMZN",
@@ -87,7 +91,7 @@ LIVE_RH_SPREAD_CANDIDATES: dict[str, SpreadCandidateQuote] = {
             bid=7.30,
             ask=7.60,
             mark=7.45,
-            delta=-0.278,  # Anchored below $252.27 POC support
+            delta=-0.278,
             implied_volatility=0.3836,
             open_interest=16358,
         ),
@@ -121,7 +125,7 @@ LIVE_RH_SPREAD_CANDIDATES: dict[str, SpreadCandidateQuote] = {
             bid=4.80,
             ask=5.10,
             mark=4.95,
-            delta=0.275,  # Anchored above $360.83 multi-week ceiling
+            delta=0.275,
             implied_volatility=0.2261,
             open_interest=7489,
         ),
@@ -155,7 +159,7 @@ LIVE_RH_SPREAD_CANDIDATES: dict[str, SpreadCandidateQuote] = {
             bid=11.85,
             ask=12.15,
             mark=12.00,
-            delta=-0.278,  # Anchored below $362.00 support
+            delta=-0.278,
             implied_volatility=0.5253,
             open_interest=3790,
         ),
@@ -181,16 +185,23 @@ class RobinhoodClient:
     """
     Client wrapper for Robinhood MCP account, option chains, quotes,
     Smart Mid-Price Limit Walker, GTC staging, and Cancel-First exits.
+    Defaults strictly to the Robinhood 'MCP' account (512500422).
     """
 
     def __init__(
         self,
-        account_number: str = "512500422",
+        account_number: str = DEFAULT_MCP_ACCOUNT_NUMBER,
+        account_nickname: str = DEFAULT_MCP_ACCOUNT_NICKNAME,
         total_value: float = 5207.86,
         cash: float = 5492.86,
         buying_power: float = 3992.86,
     ) -> None:
+        if account_number == "542891403":
+            raise PermissionError(
+                "Account 542891403 is read-only; default to the 'MCP' account (512500422)."
+            )
         self.account_number = account_number
+        self.account_nickname = account_nickname
         self.total_value = total_value
         self.cash = cash
         self.buying_power = buying_power
@@ -200,6 +211,9 @@ class RobinhoodClient:
     def get_portfolio_summary(self) -> dict[str, float | str]:
         return {
             "account_number": self.account_number,
+            "account_nickname": self.account_nickname,
+            "brokerage_trading_type": "limited_margin",
+            "option_level": "option_level_3",
             "total_value": self.total_value,
             "cash": self.cash,
             "buying_power": self.buying_power,
@@ -229,6 +243,8 @@ class RobinhoodClient:
             order_type=order_type,
             limit_price=round(limit_price, 2),
             contracts=contracts,
+            account_number=self.account_number,
+            account_nickname=self.account_nickname,
             status="OPEN",
             metadata=metadata or {},
         )

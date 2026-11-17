@@ -25,6 +25,9 @@ class Settings(BaseModel):
     robinhood_account_number: str = Field(
         default_factory=lambda: os.getenv("ROBINHOOD_ACCOUNT_NUMBER", "512500422")
     )
+    robinhood_account_nickname: str = Field(
+        default_factory=lambda: os.getenv("ROBINHOOD_ACCOUNT_NICKNAME", "MCP")
+    )
     unusual_whales_api_key: str = Field(
         default_factory=lambda: os.getenv("UNUSUAL_WHALES_API_KEY", "uw-mcp-bridge")
     )
