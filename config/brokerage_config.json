@@ -1,4 +1,13 @@
 {
+  "paper_execution_broker": "alpaca",
+  "alpaca_paper_account": {
+    "account_number": "PA35XZXE8ZZE",
+    "status": "ACTIVE",
+    "options_approved_level": 3,
+    "options_trading_level": 3,
+    "equity_usd": 10000.0,
+    "options_buying_power_usd": 10000.0
+  },
   "default_brokerage": "robinhood",
   "default_account_nickname": "MCP",
   "default_account_number": "512500422",

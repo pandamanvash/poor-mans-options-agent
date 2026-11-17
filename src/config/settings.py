@@ -28,6 +28,12 @@ class Settings(BaseModel):
     robinhood_account_nickname: str = Field(
         default_factory=lambda: os.getenv("ROBINHOOD_ACCOUNT_NICKNAME", "MCP")
     )
+    alpaca_paper_account_number: str = Field(
+        default_factory=lambda: os.getenv("ALPACA_PAPER_ACCOUNT_NUMBER", "PA35XZXE8ZZE")
+    )
+    paper_execution_broker: str = Field(
+        default_factory=lambda: os.getenv("PAPER_EXECUTION_BROKER", "alpaca")
+    )
     unusual_whales_api_key: str = Field(
         default_factory=lambda: os.getenv("UNUSUAL_WHALES_API_KEY", "uw-mcp-bridge")
     )

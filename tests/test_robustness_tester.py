@@ -189,3 +189,23 @@ def test_robustness_runner_reference_and_options_hooks(tmp_path: Path) -> None:
     )
     assert set(multi_out["evaluated_versions"]) == {"v0", "v1"}
     assert (tmp_path / "options_v0_to_v5_robustness_summary.png").exists()
+
+
+def test_parameter_sensitivity_grid_overrides_fixed_params() -> None:
+    trades_v0 = BacktestingAgent().build_90d_trade_tape()
+    res = run_parameter_sensitivity(
+        data=trades_v0,
+        param_x_name="iv_rank_min",
+        param_x_values=[15, 25, 35],
+        param_y_name="profit_target_pct",
+        param_y_values=[0.35, 0.50, 0.65],
+        fixed_params={"iv_rank_min": 30.0, "profit_target_pct": 0.50, "delta_stop": 0.43},
+        starting_capital=5000.0,
+        strategy_name="Override Regression Test",
+    )
+    sharpe_values = {
+        val
+        for row in res.sharpe_grid.values()
+        for val in row.values()
+    }
+    assert len(sharpe_values) > 1, "2D grid sweep must not be flattened by fixed_params"

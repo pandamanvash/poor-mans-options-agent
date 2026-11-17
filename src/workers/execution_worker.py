@@ -140,7 +140,12 @@ class ExecutionWorker:
             order_type="ENTRY_LIMIT",
             limit_price=current_limit,
             contracts=intent.contracts,
-            metadata={"mode": self.execution_mode.value},
+            metadata={
+                "mode": self.execution_mode.value,
+                "expiration_date": intent.expiration_date,
+                "short_strike": intent.short_strike,
+                "long_strike": intent.long_strike,
+            },
         )
 
         # Smart Mid-Price Limit Walker (up to 4 steps)
@@ -179,7 +184,12 @@ class ExecutionWorker:
             order_type="GTC_TAKE_PROFIT",
             limit_price=target_close_price,
             contracts=intent.contracts,
-            metadata={"parent_entry_order_id": order.order_id},
+            metadata={
+                "parent_entry_order_id": order.order_id,
+                "expiration_date": intent.expiration_date,
+                "short_strike": intent.short_strike,
+                "long_strike": intent.long_strike,
+            },
         )
 
         # Fetch TradingView structural anchor & ATR for intra-week risk management
