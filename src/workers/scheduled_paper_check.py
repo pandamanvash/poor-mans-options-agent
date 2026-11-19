@@ -37,18 +37,18 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
 
     uw_client = UnusualWhalesClient()
     tv_client = TradingViewClient()
-    rh_client = RobinhoodClient(account_number=DEFAULT_MCP_ACCOUNT_NUMBER)
-    exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
-        AlpacaPaperClient(
-            account_number=settings.alpaca_paper_account_number,
-            total_value=5207.86,
-            cash=5492.86,
-            buying_power=3992.86,
-        )
-        if not settings.robinhood_trading_enabled
-        else rh_client
+    alpaca_client = AlpacaPaperClient(
+        account_number=settings.alpaca_paper_account_number,
+        total_value=10000.0,
+        cash=10000.0,
+        buying_power=10000.0,
     )
-    screener = ScreenerJob(uw_client=uw_client, tv_client=tv_client, rh_client=rh_client)
+    exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
+        alpaca_client
+        if not settings.robinhood_trading_enabled
+        else RobinhoodClient(account_number=DEFAULT_MCP_ACCOUNT_NUMBER)
+    )
+    screener = ScreenerJob(uw_client=uw_client, tv_client=tv_client, rh_client=exec_broker_client)  # type: ignore[arg-type]
     exec_worker = ExecutionWorker(
         rh_client=exec_broker_client,
         tv_client=tv_client,
@@ -147,8 +147,8 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     cycle_payload = {
         "timestamp_utc": now_iso,
         "cycle_mode": mode,
-        "execution_mode": "PAPER",
-        "account": rh_client.get_portfolio_summary(),
+        "execution_mode": "ALPACA_PAPER",
+        "account": exec_broker_client.get_portfolio_summary(),
         "vix_regime": screen_res["vix_regime"],
         "vix_summary": screen_res["vix_summary"],
         "paper_trades_active": filled_trades,
@@ -187,12 +187,12 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     status_md.write_text(
         "\n".join(
             [
-                f"# Latest Scheduled Paper-Trading Status (`{now_iso}`)",
+                f"# Latest Alpaca Account Status (`{now_iso}`)",
                 "",
-                f"- **Cycle Mode:** `{mode}` (`EXECUTION_MODE=PAPER`, `paper_execution_broker=alpaca`)",
-                f"- **Alpaca Paper Account:** `PA35XZXE8ZZE` (`paper=true`) | **Robinhood Default:** `MCP` (`••••{DEFAULT_MCP_ACCOUNT_NUMBER[-4:]}`)",
+                f"- **Cycle Mode:** `{mode}` (`ACTIVE_EXECUTION_BROKER=alpaca`)",
+                f"- **Alpaca Account:** `{exec_broker_client.account_number}` (`$10,000.00` base equity)",
                 f"- **Active VIX Regime:** `{screen_res['vix_regime']}` — {screen_res['vix_summary']}",
-                f"- **Post-Allocation Buying Power:** `${rh_client.buying_power:,.2f}`",
+                f"- **Post-Allocation Buying Power:** `${exec_broker_client.buying_power:,.2f}`",
                 "",
                 "## 1. Potential Trades Summary (Screener Scan)",
                 "",
