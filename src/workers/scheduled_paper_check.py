@@ -16,6 +16,7 @@ from src.mcp_clients.unusual_whales import UnusualWhalesClient
 from src.ml_engine.kpi_tracker import StrategyKPITracker
 from src.ml_engine.model_trainer import WeeklyModelTrainer
 from src.ml_engine.trade_journal import TradeJournalLogger
+from src.notifications.notifier import Notifier
 from src.workers.execution_worker import ExecutionWorker
 from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInput
 from src.workers.screener_job import ScreenerJob
@@ -153,6 +154,21 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     journal_report = TradeJournalLogger().generate_report(kpi_snapshot=kpi_summary)
     cycle_payload["kpi_summary"] = kpi_summary["core_kpis"]
     cycle_payload["trade_journal_summary"] = journal_report
+
+    if mode in ("screener", "friday_ml_retrain"):
+        Notifier().send_alert(
+            title=f"Options Agent ({mode.upper()}) — {screen_res['vix_regime']}",
+            message=(
+                f"Qualifying Trades: {screen_res['queued_intents_count']} | "
+                f"Portfolio Rating: {journal_report['overall_rating_grade']} ({journal_report['overall_performance_score']}/100)"
+            ),
+            metadata={
+                "broker": "alpaca_paper (PA35XZXE8ZZE)",
+                "vix_regime": screen_res["vix_regime"],
+                "active_spreads": len(filled_trades),
+                "rating": journal_report["overall_rating_grade"],
+            },
+        )
 
     status_md = Path("reports/latest_paper_status.md")
     status_md.parent.mkdir(parents=True, exist_ok=True)

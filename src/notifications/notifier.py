@@ -1,4 +1,4 @@
-"""Notification service for trade tickets, 1-click approvals, and risk alerts."""
+"""Notification service for trade tickets, 1-click approvals, and risk alerts (with Discord Webhook formatting)."""
 from __future__ import annotations
 
 import logging
@@ -17,7 +17,7 @@ class Notifier:
         self.sent_messages: list[dict[str, Any]] = []
 
     def send_alert(self, title: str, message: str, metadata: dict[str, Any] | None = None) -> bool:
-        payload = {
+        payload: dict[str, Any] = {
             "title": title,
             "message": message,
             "metadata": metadata or {},
@@ -26,9 +26,31 @@ class Notifier:
         logger.info("[ALERT] %s: %s", title, message)
         if not self.webhook_url:
             return True
+
+        # Format native Discord webhook payload if targeting discord.com/api/webhooks
+        if "discord.com/api/webhooks" in self.webhook_url:
+            fields = [
+                {"name": str(k), "value": f"`{v}`", "inline": True}
+                for k, v in (metadata or {}).items()
+            ][:10]
+            http_body: dict[str, Any] = {
+                "username": "Poor Man's Options Agent",
+                "content": f"**{title}**\n{message}",
+                "embeds": [
+                    {
+                        "title": title,
+                        "description": message,
+                        "color": 1096065,
+                        "fields": fields,
+                    }
+                ],
+            }
+        else:
+            http_body = payload
+
         try:
             with httpx.Client(timeout=5.0) as client:
-                resp = client.post(self.webhook_url, json=payload)
+                resp = client.post(self.webhook_url, json=http_body)
                 resp.raise_for_status()
             return True
         except Exception as exc:

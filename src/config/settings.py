@@ -31,6 +31,15 @@ class Settings(BaseModel):
     alpaca_paper_account_number: str = Field(
         default_factory=lambda: os.getenv("ALPACA_PAPER_ACCOUNT_NUMBER", "PA35XZXE8ZZE")
     )
+    alpaca_api_key: str = Field(
+        default_factory=lambda: os.getenv("ALPACA_API_KEY", "")
+    )
+    alpaca_secret_key: str = Field(
+        default_factory=lambda: os.getenv("ALPACA_SECRET_KEY", "")
+    )
+    alpaca_base_url: str = Field(
+        default_factory=lambda: os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    )
     paper_execution_broker: str = Field(
         default_factory=lambda: os.getenv("PAPER_EXECUTION_BROKER", "alpaca")
     )

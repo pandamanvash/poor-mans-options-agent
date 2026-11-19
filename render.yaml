@@ -22,18 +22,20 @@ services:
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
         value: "PA35XZXE8ZZE"
+      - key: ALPACA_BASE_URL
+        value: "https://paper-api.alpaca.markets"
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
       - key: ROBINHOOD_ACCOUNT_NUMBER
         value: "512500422"
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
-        value: "uw-mcp-bridge"
-      - key: TRADINGVIEW_MCP_URL
-        value: "http://localhost:8081/mcp"
-      - key: ROBINHOOD_MCP_URL
-        value: "http://localhost:8082/mcp"
+        sync: false
       - key: WEBHOOK_NOTIFICATION_URL
-        value: ""
+        sync: false
 
   - type: worker
     name: execution-worker
@@ -58,14 +60,18 @@ services:
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
         value: "PA35XZXE8ZZE"
+      - key: ALPACA_BASE_URL
+        value: "https://paper-api.alpaca.markets"
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
       - key: ROBINHOOD_ACCOUNT_NUMBER
         value: "512500422"
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
-      - key: ROBINHOOD_MCP_URL
-        value: "http://localhost:8082/mcp"
       - key: WEBHOOK_NOTIFICATION_URL
-        value: ""
+        sync: false
 
   - type: cron
     name: screener-cron
@@ -90,16 +96,20 @@ services:
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
         value: "PA35XZXE8ZZE"
+      - key: ALPACA_BASE_URL
+        value: "https://paper-api.alpaca.markets"
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
       - key: ROBINHOOD_ACCOUNT_NUMBER
         value: "512500422"
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
-        value: "uw-mcp-bridge"
-      - key: TRADINGVIEW_MCP_URL
-        value: "http://localhost:8081/mcp"
-      - key: ROBINHOOD_MCP_URL
-        value: "http://localhost:8082/mcp"
+        sync: false
+      - key: WEBHOOK_NOTIFICATION_URL
+        sync: false
 
   - type: cron
     name: friday-ml-backtest-cron
@@ -124,12 +134,18 @@ services:
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
         value: "PA35XZXE8ZZE"
+      - key: ALPACA_BASE_URL
+        value: "https://paper-api.alpaca.markets"
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_SECRET_KEY
+        sync: false
       - key: ROBINHOOD_ACCOUNT_NUMBER
         value: "512500422"
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: WEBHOOK_NOTIFICATION_URL
-        value: ""
+        sync: false
 
 databases:
   - name: options-agent-db
