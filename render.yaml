@@ -12,6 +12,14 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: PAPER_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_PAPER_ACCOUNT_NUMBER
+        value: "PA35XZXE8ZZE"
+      - key: ROBINHOOD_ACCOUNT_NUMBER
+        value: "512500422"
+      - key: ROBINHOOD_ACCOUNT_NICKNAME
+        value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
         sync: false
       - key: TRADINGVIEW_MCP_URL
@@ -34,8 +42,14 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: PAPER_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_PAPER_ACCOUNT_NUMBER
+        value: "PA35XZXE8ZZE"
       - key: ROBINHOOD_ACCOUNT_NUMBER
         value: "512500422"
+      - key: ROBINHOOD_ACCOUNT_NICKNAME
+        value: "MCP"
       - key: ROBINHOOD_MCP_URL
         sync: false
       - key: WEBHOOK_NOTIFICATION_URL
@@ -54,6 +68,14 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: PAPER_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_PAPER_ACCOUNT_NUMBER
+        value: "PA35XZXE8ZZE"
+      - key: ROBINHOOD_ACCOUNT_NUMBER
+        value: "512500422"
+      - key: ROBINHOOD_ACCOUNT_NICKNAME
+        value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
         sync: false
       - key: TRADINGVIEW_MCP_URL
@@ -74,6 +96,14 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: PAPER_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_PAPER_ACCOUNT_NUMBER
+        value: "PA35XZXE8ZZE"
+      - key: ROBINHOOD_ACCOUNT_NUMBER
+        value: "512500422"
+      - key: ROBINHOOD_ACCOUNT_NICKNAME
+        value: "MCP"
       - key: WEBHOOK_NOTIFICATION_URL
         sync: false
 
