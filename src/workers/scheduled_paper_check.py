@@ -112,6 +112,17 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
                 vix_1h_slope=vix_snap.vix_1h_slope,
             )
             decision = monitor.poll_and_log(session=session, pos=pos_input, trade=tr)
+            defensive_exit = None
+            if decision.action in ("HARD_STOP_EXIT", "EARLY_CUT_ML_OVERRIDE", "21_DTE_ROLL"):
+                exit_reason = "21_DTE_ROLL" if decision.action == "21_DTE_ROLL" else "HARD_STOP_EXIT"
+                defensive_exit = exec_worker.execute_defensive_exit_or_roll(
+                    session=session,
+                    trade=tr,
+                    exit_reason=exit_reason,
+                    current_mid_debit=tr.current_mark,
+                    chase_steps_required=1,
+                    chase_step_increment=0.02,
+                )
             monitor_checks.append(
                 {
                     "ticker": tr.ticker,
@@ -121,6 +132,7 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
                     "action": decision.action,
                     "polling_interval_seconds": decision.polling_interval_seconds,
                     "rationale": decision.rationale,
+                    "defensive_exit": defensive_exit,
                 }
             )
 

@@ -392,15 +392,23 @@ def main() -> None:
     import time
     from src.workers.scheduled_paper_check import run_scheduled_paper_cycle
 
-    print("[PositionMonitorWorker] Starting continuous intra-week monitor worker...")
+    print("[UnifiedOptionsWorker] Starting combined Execution + Position Monitor loop...")
+    tick = 0
     while True:
-        summary = run_scheduled_paper_cycle(mode="monitor")
+        summary = run_scheduled_paper_cycle(mode="monitor_and_screen")
+        active = summary.get("paper_trades_active", [])
         decisions = summary.get("monitor_decisions", [])
-        interval = min((int(d.get("polling_interval_seconds", 300)) for d in decisions), default=300)
-        print(
-            f"[PositionMonitorWorker] Polled {len(decisions)} open position(s); next check in {interval}s."
+        min_interval = min(
+            (int(d.get("polling_interval_seconds", 300)) for d in decisions),
+            default=300,
         )
-        time.sleep(interval)
+        sleep_s = 60 if min_interval <= 60 else 60
+        tick += 1
+        print(
+            f"[UnifiedOptionsWorker] Tick #{tick}: managed {len(active)} active spread(s), "
+            f"evaluated {len(decisions)} monitor decision(s); next tick in {sleep_s}s."
+        )
+        time.sleep(sleep_s)
 
 
 if __name__ == "__main__":
