@@ -22,19 +22,35 @@ def _compute_ema(values: Sequence[float], period: int) -> float:
 
 
 def _compute_rsi(values: Sequence[float], period: int = 14) -> float:
+    """
+    Compute Wilder's Smoothed RSI (RMA), matching TradingView's ta.rsi(close, 14).
+    """
     if len(values) < period + 1:
         return 50.0
-    gains, losses = [], []
-    for i in range(1, len(values)):
-        diff = values[i] - values[i - 1]
-        gains.append(max(diff, 0.0))
-        losses.append(max(-diff, 0.0))
-    avg_gain = sum(gains[-period:]) / period
-    avg_loss = sum(losses[-period:]) / period
-    if avg_loss == 0:
+    changes = [float(values[i]) - float(values[i - 1]) for i in range(1, len(values))]
+    gains = [max(c, 0.0) for c in changes]
+    losses = [max(-c, 0.0) for c in changes]
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for g, l in zip(gains[period:], losses[period:]):
+        avg_gain = (avg_gain * (period - 1) + g) / period
+        avg_loss = (avg_loss * (period - 1) + l) / period
+
+    if avg_loss == 0.0:
         return 100.0
     rs = avg_gain / avg_loss
     return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
+def _aggregate_4h_closes(hourly_closes: Sequence[float]) -> list[float]:
+    """Group 1H closes into 4H candle closes (always preserving the latest bar close)."""
+    if len(hourly_closes) < 4:
+        return [float(c) for c in hourly_closes]
+    grouped = [float(hourly_closes[i]) for i in range(3, len(hourly_closes), 4)]
+    if (len(hourly_closes) - 1) % 4 != 3:
+        grouped.append(float(hourly_closes[-1]))
+    return grouped
 
 
 def _compute_atr(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], period: int = 14) -> float:
@@ -294,24 +310,28 @@ class TradingViewClient:
         """
         status: dict[str, bool] = {"vix": False}
         try:
-            vix_bars = _fetch_yahoo_chart_bars("^VIX", interval="1h", range_str="1mo")
-            vix3m_bars = _fetch_yahoo_chart_bars("^VIX3M", interval="1h", range_str="1mo")
-            vc = vix_bars["close"]
-            vh = vix_bars["high"]
-            v3c = vix3m_bars["close"]
-            if len(vc) >= 20 and len(v3c) >= 1:
-                vix_price = round(vc[-1], 2)
-                vix3m_price = round(v3c[-1], 2)
-                ema20 = _compute_ema(vc[-60:], 20)
-                w20 = vc[-20:]
-                mean20 = sum(w20) / len(w20)
-                std20 = math.sqrt(sum((x - mean20) ** 2 for x in w20) / len(w20)) or 1.0
-                upper_bb = round(mean20 + 2.0 * std20, 2)
-                lower_bb = round(mean20 - 2.0 * std20, 2)
-                rsi_4h = _compute_rsi(vc[::4] if len(vc) >= 60 else vc, 14)
-                slope_1h = round(vc[-1] - vc[-2], 2)
-                zscore_20d = round((vix_price - mean20) / std20, 2)
-                rej_wick = bool(vh and (vh[-1] - vc[-1]) >= 0.40)
+            vix_hourly = _fetch_yahoo_chart_bars("^VIX", interval="1h", range_str="3mo")
+            vix_daily = _fetch_yahoo_chart_bars("^VIX", interval="1d", range_str="3mo")
+            vix3m_daily = _fetch_yahoo_chart_bars("^VIX3M", interval="1d", range_str="1mo")
+            vc_1h = vix_hourly["close"]
+            vh_1h = vix_hourly["high"]
+            vc_1d = vix_daily["close"]
+            v3c_1d = vix3m_daily["close"]
+            if len(vc_1d) >= 20 and len(vc_1h) >= 20 and len(v3c_1d) >= 1:
+                vix_price = round(vc_1h[-1], 2)
+                vix3m_price = round(v3c_1d[-1], 2)
+                vc_4h = _aggregate_4h_closes(vc_1h)
+                ema20 = _compute_ema(vc_4h[-60:], 20)
+                # Compute 20-day Bollinger Bands & Z-Score strictly on daily bars
+                w20_daily = vc_1d[-20:]
+                mean20_d = sum(w20_daily) / len(w20_daily)
+                std20_d = math.sqrt(sum((x - mean20_d) ** 2 for x in w20_daily) / len(w20_daily)) or 1.0
+                upper_bb = round(mean20_d + 2.0 * std20_d, 2)
+                lower_bb = round(mean20_d - 2.0 * std20_d, 2)
+                rsi_4h = _compute_rsi(vc_4h, 14)
+                slope_1h = round(vc_1h[-1] - vc_1h[-2], 2)
+                zscore_20d = round((vix_price - mean20_d) / std20_d, 2)
+                rej_wick = bool(vh_1h and (vh_1h[-1] - vc_1h[-1]) >= 0.40)
                 self._vix_snapshot = VixMarketSnapshot(
                     vix_price=vix_price,
                     vix3m_price=vix3m_price,
@@ -332,14 +352,14 @@ class TradingViewClient:
         for sym in target_tickers:
             try:
                 daily = _fetch_yahoo_chart_bars(sym, interval="1d", range_str="1y")
-                hourly = _fetch_yahoo_chart_bars(sym, interval="1h", range_str="1mo")
+                hourly = _fetch_yahoo_chart_bars(sym, interval="1h", range_str="3mo")
                 dc, dh, dl = daily["close"], daily["high"], daily["low"]
                 hc = hourly["close"]
                 if len(dc) >= 50 and len(hc) >= 20:
                     price = round(hc[-1], 2)
                     ema50 = _compute_ema(dc, 50)
                     ema200 = _compute_ema(dc, min(200, len(dc)))
-                    rsi_4h = _compute_rsi(hc[::4] if len(hc) >= 60 else hc, 14)
+                    rsi_4h = _compute_rsi(_aggregate_4h_closes(hc), 14)
                     atr_14 = _compute_atr(dh, dl, dc, 14)
                     support_poc = round(min(dl[-20:]), 2)
                     resistance_ceil = round(max(dh[-20:]), 2)
