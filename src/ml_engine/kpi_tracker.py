@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.config.settings import settings
+from src.mcp_clients.alpaca import AlpacaPaperClient
 from src.ml_engine.backtest_agent import BacktestingAgent
 
 
@@ -67,17 +69,27 @@ class StrategyKPITracker:
             eq_b.append(round(eq_b[-1] + float(t["pnl_policy_b_usd"]), 2))
             eq_c.append(round(eq_c[-1] + float(t["pnl_policy_c_usd"]), 2))
 
+        alpaca_client = AlpacaPaperClient(account_number=settings.alpaca_paper_account_number)
+        alpaca_positions = alpaca_client.fetch_live_positions()
+        alpaca_live_equity = alpaca_client.total_value
+        alpaca_live_pnl = round(alpaca_live_equity - 10000.0, 2)
+
         now_iso = datetime.now(timezone.utc).isoformat()
         kpi_snapshot = {
             "updated_at_utc": now_iso,
             "account_default": {
-                "nickname": "MCP",
-                "account_number": "512500422",
-                "base_capital_usd": 5000.0,
-                "live_account_value_usd": 5207.86,
-                "post_allocation_buying_power_usd": latest_cycle.get("account", {}).get(
-                    "buying_power", 2620.86
+                "broker": "alpaca_paper",
+                "nickname": "Alpaca Paper" if not settings.robinhood_trading_enabled else "MCP",
+                "account_number": (
+                    alpaca_client.account_number
+                    if not settings.robinhood_trading_enabled
+                    else settings.robinhood_account_number
                 ),
+                "base_capital_usd": 10000.0 if not settings.robinhood_trading_enabled else 5000.0,
+                "live_account_value_usd": alpaca_live_equity,
+                "alpaca_live_pnl_usd": alpaca_live_pnl,
+                "alpaca_open_positions_count": len(alpaca_positions),
+                "post_allocation_buying_power_usd": alpaca_client.buying_power,
             },
             "schedule_health": {
                 "scheduled_cycles_completed": scheduled_runs,

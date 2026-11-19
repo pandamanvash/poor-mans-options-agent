@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any, Sequence
 
 from src.db.models import StressEvent
@@ -60,8 +62,13 @@ class StressEpisode:
 class FeatureStore:
     """Loads intra-week stress telemetry and historical lookalike episodes for weekly ML training."""
 
-    def build_training_episodes(self, session: Any | None = None) -> list[StressEpisode]:
+    def build_training_episodes(
+        self,
+        session: Any | None = None,
+        stress_jsonl_path: Path = Path("data/stress_events.jsonl"),
+    ) -> list[StressEpisode]:
         episodes: list[StressEpisode] = list(self._seed_historical_lookalikes())
+        seen_keys: set[str] = set()
 
         if session is not None:
             db_events: Sequence[StressEvent] = session.query(StressEvent).all()
@@ -72,6 +79,8 @@ class FeatureStore:
                     or (abs(ev.uw_darkpool_net_flow_1h) > 400_000 and ev.uw_sweep_ratio >= 0.68)
                 )
                 dp_z = round(abs(ev.uw_darkpool_net_flow_1h) / 250_000.0, 2)
+                ep_key = f"{ev.ticker}_{ev.short_delta}_{ev.spread_mark}"
+                seen_keys.add(ep_key)
                 episodes.append(
                     StressEpisode(
                         episode_id=f"LIVE_WK_{idx+1}_{ev.ticker}",
@@ -91,6 +100,47 @@ class FeatureStore:
                         vix_1h_slope=ev.vix_1h_slope,
                         vix_term_structure_ratio=ev.vix_term_structure_ratio,
                         dte=ev.dte,
+                        true_breakout=is_breakout,
+                    )
+                )
+
+        if stress_jsonl_path.exists():
+            for idx, line in enumerate(stress_jsonl_path.read_text(encoding="utf-8").splitlines()):
+                if not line.strip():
+                    continue
+                ev_d = json.loads(line)
+                ep_key = f"{ev_d.get('ticker')}_{ev_d.get('short_delta')}_{ev_d.get('spread_mark')}"
+                if ep_key in seen_keys:
+                    continue
+                seen_keys.add(ep_key)
+                is_breakout = int(
+                    bool(ev_d.get("tv_1h_close_breach"))
+                    or float(ev_d.get("vix_term_structure_ratio", 0.95)) > 1.0
+                    or (
+                        abs(float(ev_d.get("uw_darkpool_net_flow_1h", 0.0))) > 400_000
+                        and float(ev_d.get("uw_sweep_ratio", 0.5)) >= 0.68
+                    )
+                )
+                dp_z = round(abs(float(ev_d.get("uw_darkpool_net_flow_1h", 0.0))) / 250_000.0, 2)
+                episodes.append(
+                    StressEpisode(
+                        episode_id=f"ALPACA_LOG_{idx+1}_{ev_d.get('ticker', 'UNK')}",
+                        ticker=str(ev_d.get("ticker", "UNK")),
+                        strategy=str(ev_d.get("strategy", "BULL_PUT_SPREAD")),
+                        contracts=max(2, int(ev_d.get("contracts", 2))),
+                        entry_credit=1.60,
+                        spread_mark_at_stress=float(ev_d.get("spread_mark", 2.0)),
+                        short_delta=float(ev_d.get("short_delta", 0.40)),
+                        dist_to_tv_sr_atr=float(ev_d.get("dist_to_tv_sr_atr", 0.0)),
+                        tv_4h_rsi=float(ev_d.get("tv_4h_rsi", 50.0)),
+                        uw_darkpool_flow_zscore=dp_z,
+                        uw_ask_sweep_ratio=float(ev_d.get("uw_sweep_ratio", 0.5)),
+                        vix_level=float(ev_d.get("vix_level", 20.0)),
+                        vix_zscore_20d=float(ev_d.get("vix_zscore_20d", 0.0)),
+                        vix_4h_rsi=float(ev_d.get("vix_4h_rsi", 50.0)),
+                        vix_1h_slope=float(ev_d.get("vix_1h_slope", 0.0)),
+                        vix_term_structure_ratio=float(ev_d.get("vix_term_structure_ratio", 0.95)),
+                        dte=int(ev_d.get("dte", 30)),
                         true_breakout=is_breakout,
                     )
                 )

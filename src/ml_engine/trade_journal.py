@@ -195,6 +195,63 @@ class TradeJournalLogger:
 
         return list(existing.values())
 
+    def sync_from_alpaca(self, alpaca_client: Any) -> list[dict[str, Any]]:
+        """
+        Sync live filled/open option orders and positions directly from Alpaca Paper (PA35XZXE8ZZE)
+        into trade_journal.jsonl so Friday ML calibration & ratings reflect real Alpaca results.
+        """
+        existing = self.load_entries()
+        orders = alpaca_client.fetch_live_orders(status="all", limit=50)
+        positions = alpaca_client.fetch_live_positions()
+        pos_by_symbol = {str(p.get("symbol", "")): p for p in positions}
+
+        for order in orders:
+            if order.get("asset_class") not in ("us_option", "mleg", None) and order.get("order_class") != "mleg":
+                continue
+            oid = str(order.get("client_order_id") or order.get("id") or "")
+            if not oid:
+                continue
+            legs = order.get("legs") or []
+            primary_sym = str(order.get("symbol") or (legs[0].get("symbol") if legs else "OPT"))
+            ticker = "".join(ch for ch in primary_sym[:6] if ch.isalpha()) or primary_sym
+            qty = int(float(order.get("qty") or 1))
+            fill_price = abs(float(order.get("filled_avg_price") or order.get("limit_price") or 0.0))
+            status_raw = str(order.get("status", "open")).upper()
+            pos_info = pos_by_symbol.get(primary_sym, {})
+            unrealized_pnl = float(pos_info.get("unrealized_pl") or 0.0)
+            score = 92.0 if status_raw == "FILLED" and unrealized_pnl >= 0 else 85.0
+            grade = score_to_grade(score)
+            existing[oid] = asdict(
+                TradeJournalEntry(
+                    trade_id=oid,
+                    ticker=ticker,
+                    strategy="ALPACA_MLEG_SPREAD" if legs else "ALPACA_OPTION",
+                    category="Alpaca Live Paper Execution",
+                    execution_start_date=str(order.get("created_at") or datetime.now(timezone.utc).isoformat()),
+                    execution_end_date=str(order.get("filled_at") or "OPEN (Alpaca)"),
+                    status=status_raw,
+                    strikes=primary_sym,
+                    contracts=qty,
+                    entry_credit=round(fill_price, 2),
+                    exit_or_mark_price=round(fill_price, 2),
+                    pnl_usd=round(unrealized_pnl, 2),
+                    collateral_usd=round(qty * 500.0, 2),
+                    working_thesis=f"Synced directly from Alpaca Paper account {alpaca_client.account_number}.",
+                    performance_score=score,
+                    rating_grade=grade,
+                    performance_summary=(
+                        f"Alpaca order {status_raw} ({qty}x {primary_sym}) @ ${fill_price:.2f}; "
+                        f"current P&L ${unrealized_pnl:+.2f}."
+                    ),
+                )
+            )
+
+        self.journal_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.journal_jsonl_path.open("w", encoding="utf-8") as fh:
+            for item in existing.values():
+                fh.write(json.dumps(item) + "\n")
+        return list(existing.values())
+
     def generate_report(self, kpi_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         entries = list(self.load_entries().values())
         kpi = kpi_snapshot or StrategyKPITracker().compute_and_save_kpis()

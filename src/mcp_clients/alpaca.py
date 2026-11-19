@@ -167,6 +167,36 @@ class AlpacaPaperClient:
             logger.warning("Alpaca /v2/account sync warning: %s", exc)
             return False
 
+    def fetch_live_positions(self) -> list[dict[str, Any]]:
+        if not self._has_live_credentials():
+            return []
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(f"{self.base_url}/v2/positions", headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else []
+        except Exception as exc:
+            logger.warning("Alpaca /v2/positions fetch warning: %s", exc)
+            return []
+
+    def fetch_live_orders(self, status: str = "all", limit: int = 50) -> list[dict[str, Any]]:
+        if not self._has_live_credentials():
+            return []
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(
+                    f"{self.base_url}/v2/orders",
+                    headers=self._headers(),
+                    params={"status": status, "nested": "true", "limit": str(limit)},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data if isinstance(data, list) else []
+        except Exception as exc:
+            logger.warning("Alpaca /v2/orders fetch warning: %s", exc)
+            return []
+
     def get_portfolio_summary(self) -> dict[str, float | str]:
         return {
             "broker": "alpaca_paper",
