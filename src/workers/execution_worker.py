@@ -9,6 +9,7 @@ from src.config.portfolio_rules import (
 )
 from src.config.settings import ExecutionMode, settings
 from src.db.models import ExecutionIntent, Trade
+from src.mcp_clients.alpaca import AlpacaPaperClient
 from src.mcp_clients.robinhood import RobinhoodClient
 from src.mcp_clients.tradingview import TradingViewClient
 from src.notifications.notifier import Notifier
@@ -16,8 +17,9 @@ from src.notifications.notifier import Notifier
 
 class ExecutionWorker:
     """
-    Fault-tolerant Robinhood trade execution service:
-      1. Execution Mode Toggle (FULL_AUTO, SEMI_AUTO, PAPER)
+    Fault-tolerant trade execution service (defaults to Alpaca Paper PA35XZXE8ZZE while
+    ROBINHOOD_TRADING_ENABLED=false; can be toggled to Robinhood MCP 512500422 later):
+      1. Execution Mode & Broker Toggle (ALPACA_TRADING_ENABLED=true, ROBINHOOD_TRADING_ENABLED=false)
       2. Smart Mid-Price Limit Walker (up to 4 steps of $0.01-$0.02 down to min_credit_floor)
       3. Automatic 50% Take-Profit GTC Staging upon entry fill
       4. Cancel-First Lock & Aggressive Limit Chaser ($0.02/step) for HARD_STOP_EXIT / 21_DTE_ROLL
@@ -26,12 +28,17 @@ class ExecutionWorker:
 
     def __init__(
         self,
-        rh_client: RobinhoodClient | None = None,
+        rh_client: RobinhoodClient | AlpacaPaperClient | None = None,
         tv_client: TradingViewClient | None = None,
         notifier: Notifier | None = None,
         execution_mode: ExecutionMode | None = None,
     ) -> None:
-        self.rh = rh_client or RobinhoodClient()
+        if rh_client is not None:
+            self.rh = rh_client
+        elif not settings.robinhood_trading_enabled:
+            self.rh = AlpacaPaperClient(account_number=settings.alpaca_paper_account_number)
+        else:
+            self.rh = RobinhoodClient(account_number=settings.robinhood_account_number)
         self.tv = tv_client or TradingViewClient()
         self.notifier = notifier or Notifier()
         self.execution_mode = execution_mode or settings.execution_mode

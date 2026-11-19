@@ -34,6 +34,15 @@ class Settings(BaseModel):
     paper_execution_broker: str = Field(
         default_factory=lambda: os.getenv("PAPER_EXECUTION_BROKER", "alpaca")
     )
+    active_execution_broker: str = Field(
+        default_factory=lambda: os.getenv("ACTIVE_EXECUTION_BROKER", "alpaca")
+    )
+    alpaca_trading_enabled: bool = Field(
+        default_factory=lambda: os.getenv("ALPACA_TRADING_ENABLED", "true").lower() == "true"
+    )
+    robinhood_trading_enabled: bool = Field(
+        default_factory=lambda: os.getenv("ROBINHOOD_TRADING_ENABLED", "false").lower() == "true"
+    )
     unusual_whales_api_key: str = Field(
         default_factory=lambda: os.getenv("UNUSUAL_WHALES_API_KEY", "uw-mcp-bridge")
     )

@@ -87,6 +87,14 @@ class TestAlpacaClient(unittest.TestCase):
         entry_order = alpaca.get_order(str(trade.entry_order_id))
         self.assertEqual(entry_order.mleg_payload["limit_price"], "-1.68")
 
+    def test_default_execution_worker_uses_alpaca_when_robinhood_trading_disabled(self):
+        from src.config.settings import settings
+
+        self.assertFalse(settings.robinhood_trading_enabled)
+        self.assertTrue(settings.alpaca_trading_enabled)
+        default_worker = ExecutionWorker()
+        self.assertIsInstance(default_worker.rh, AlpacaPaperClient)
+
 
 if __name__ == "__main__":
     unittest.main()

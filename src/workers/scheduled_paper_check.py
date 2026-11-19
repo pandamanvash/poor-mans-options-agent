@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.config.settings import ExecutionMode
+from src.config.settings import ExecutionMode, settings
 from src.db.models import ExecutionIntent, Trade
 from src.db.session import LightweightSession, _build_engine, get_db_session, init_db
+from src.mcp_clients.alpaca import AlpacaPaperClient
 from src.mcp_clients.robinhood import DEFAULT_MCP_ACCOUNT_NUMBER, RobinhoodClient
 from src.mcp_clients.tradingview import TradingViewClient
 from src.mcp_clients.unusual_whales import UnusualWhalesClient
@@ -36,9 +37,19 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     uw_client = UnusualWhalesClient()
     tv_client = TradingViewClient()
     rh_client = RobinhoodClient(account_number=DEFAULT_MCP_ACCOUNT_NUMBER)
+    exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
+        AlpacaPaperClient(
+            account_number=settings.alpaca_paper_account_number,
+            total_value=5207.86,
+            cash=5492.86,
+            buying_power=3992.86,
+        )
+        if not settings.robinhood_trading_enabled
+        else rh_client
+    )
     screener = ScreenerJob(uw_client=uw_client, tv_client=tv_client, rh_client=rh_client)
     exec_worker = ExecutionWorker(
-        rh_client=rh_client,
+        rh_client=exec_broker_client,
         tv_client=tv_client,
         execution_mode=ExecutionMode.PAPER,
     )

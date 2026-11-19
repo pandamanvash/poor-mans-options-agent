@@ -12,6 +12,12 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: ACTIVE_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_TRADING_ENABLED
+        value: "true"
+      - key: ROBINHOOD_TRADING_ENABLED
+        value: "false"
       - key: PAPER_EXECUTION_BROKER
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
@@ -42,6 +48,12 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: ACTIVE_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_TRADING_ENABLED
+        value: "true"
+      - key: ROBINHOOD_TRADING_ENABLED
+        value: "false"
       - key: PAPER_EXECUTION_BROKER
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
@@ -68,6 +80,12 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: ACTIVE_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_TRADING_ENABLED
+        value: "true"
+      - key: ROBINHOOD_TRADING_ENABLED
+        value: "false"
       - key: PAPER_EXECUTION_BROKER
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER
@@ -96,6 +114,12 @@ services:
           property: connectionString
       - key: EXECUTION_MODE
         value: PAPER
+      - key: ACTIVE_EXECUTION_BROKER
+        value: alpaca
+      - key: ALPACA_TRADING_ENABLED
+        value: "true"
+      - key: ROBINHOOD_TRADING_ENABLED
+        value: "false"
       - key: PAPER_EXECUTION_BROKER
         value: alpaca
       - key: ALPACA_PAPER_ACCOUNT_NUMBER

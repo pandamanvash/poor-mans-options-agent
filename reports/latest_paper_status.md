@@ -1,9 +1,9 @@
-# Latest Scheduled Paper-Trading Status (`2026-11-17T17:19:35.437006+00:00`)
+# Latest Scheduled Paper-Trading Status (`2026-11-19T06:15:04.446157+00:00`)
 
 - **Cycle Mode:** `screener` (`EXECUTION_MODE=PAPER`, `paper_execution_broker=alpaca`)
 - **Alpaca Paper Account:** `PA35XZXE8ZZE` (`paper=true`) | **Robinhood Default:** `MCP` (`••••0422`)
 - **Active VIX Regime:** `REGIME_3_ELEVATED_FEAR` — Elevated Fear / Prime Credit Harvesting (VIX=22.91, VIX3M=23.02, Ratio=0.995, 4H_RSI=65.4, ExhaustionSignal=True).
-- **Post-Allocation Buying Power:** `$2,620.86`
+- **Post-Allocation Buying Power:** `$3,992.86`
 
 ## 1. Potential Trades Summary (Screener Scan)
 

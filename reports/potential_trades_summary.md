@@ -1,4 +1,4 @@
-# Potential Trades Scan Summary (`2026-11-17T17:19:35.437006+00:00`)
+# Potential Trades Scan Summary (`2026-11-19T06:15:04.446157+00:00`)
 
 - **VIX Regime:** `REGIME_3_ELEVATED_FEAR` (`VIX/VIX3M=0.9952`)
 - **Qualifying Trades:** `2` | **Filtered Out:** `1`

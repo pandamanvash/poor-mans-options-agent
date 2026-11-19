@@ -1,14 +1,14 @@
 {
-  "updated_at_utc": "2026-11-17T17:19:41.021619+00:00",
+  "updated_at_utc": "2026-11-19T06:15:04.485158+00:00",
   "account_default": {
     "nickname": "MCP",
     "account_number": "512500422",
     "base_capital_usd": 5000.0,
     "live_account_value_usd": 5207.86,
-    "post_allocation_buying_power_usd": 2620.86
+    "post_allocation_buying_power_usd": 3992.86
   },
   "schedule_health": {
-    "scheduled_cycles_completed": 4,
+    "scheduled_cycles_completed": 5,
     "active_schedules": [
       {
         "name": "screener-cron",

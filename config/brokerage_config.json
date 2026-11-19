@@ -1,4 +1,7 @@
 {
+  "active_execution_broker": "alpaca",
+  "alpaca_trading_enabled": true,
+  "robinhood_trading_enabled": false,
   "paper_execution_broker": "alpaca",
   "alpaca_paper_account": {
     "account_number": "PA35XZXE8ZZE",
