@@ -315,3 +315,20 @@ class ExecutionWorker:
             "realized_pnl_usd": realized_pnl,
             "status": trade.status,
         }
+
+
+def main() -> None:
+    import time
+    from src.workers.scheduled_paper_check import run_scheduled_paper_cycle
+
+    print("[ExecutionWorker] Starting continuous Smart Mid-Price Limit Walker & GTC worker...")
+    while True:
+        summary = run_scheduled_paper_cycle(mode="monitor_and_screen")
+        active = summary.get("paper_trades_active", [])
+        print(f"[ExecutionWorker] Active paper positions managed: {len(active)}; sleeping 60s.")
+        time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()
+

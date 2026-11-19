@@ -336,3 +336,17 @@ class ScreenerJob:
         session.add(intent)
         session.flush()
         return intent
+
+
+def main() -> dict[str, Any]:
+    import json
+    from src.workers.scheduled_paper_check import run_scheduled_paper_cycle
+
+    res = run_scheduled_paper_cycle(mode="screener")
+    print(json.dumps(res, indent=2))
+    return res
+
+
+if __name__ == "__main__":
+    main()
+

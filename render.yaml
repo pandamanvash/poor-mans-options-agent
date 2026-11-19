@@ -21,13 +21,13 @@ services:
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
-        sync: false
+        value: "uw-mcp-bridge"
       - key: TRADINGVIEW_MCP_URL
-        sync: false
+        value: "http://localhost:8081/mcp"
       - key: ROBINHOOD_MCP_URL
-        sync: false
+        value: "http://localhost:8082/mcp"
       - key: WEBHOOK_NOTIFICATION_URL
-        sync: false
+        value: ""
 
   - type: worker
     name: execution-worker
@@ -51,9 +51,9 @@ services:
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: ROBINHOOD_MCP_URL
-        sync: false
+        value: "http://localhost:8082/mcp"
       - key: WEBHOOK_NOTIFICATION_URL
-        sync: false
+        value: ""
 
   - type: cron
     name: screener-cron
@@ -77,11 +77,11 @@ services:
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: UNUSUAL_WHALES_API_KEY
-        sync: false
+        value: "uw-mcp-bridge"
       - key: TRADINGVIEW_MCP_URL
-        sync: false
+        value: "http://localhost:8081/mcp"
       - key: ROBINHOOD_MCP_URL
-        sync: false
+        value: "http://localhost:8082/mcp"
 
   - type: cron
     name: friday-ml-backtest-cron
@@ -105,7 +105,7 @@ services:
       - key: ROBINHOOD_ACCOUNT_NICKNAME
         value: "MCP"
       - key: WEBHOOK_NOTIFICATION_URL
-        sync: false
+        value: ""
 
 databases:
   - name: options-agent-db

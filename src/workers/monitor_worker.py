@@ -386,3 +386,23 @@ class PositionMonitorWorker:
                 fh.write(json.dumps(record) + "\n")
 
         return decision
+
+
+def main() -> None:
+    import time
+    from src.workers.scheduled_paper_check import run_scheduled_paper_cycle
+
+    print("[PositionMonitorWorker] Starting continuous intra-week monitor worker...")
+    while True:
+        summary = run_scheduled_paper_cycle(mode="monitor")
+        decisions = summary.get("monitor_decisions", [])
+        interval = min((int(d.get("polling_interval_seconds", 300)) for d in decisions), default=300)
+        print(
+            f"[PositionMonitorWorker] Polled {len(decisions)} open position(s); next check in {interval}s."
+        )
+        time.sleep(interval)
+
+
+if __name__ == "__main__":
+    main()
+
