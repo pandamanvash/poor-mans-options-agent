@@ -43,6 +43,11 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         cash=10000.0,
         buying_power=10000.0,
     )
+    # Cloud-native live data refresh (works 100% on Render without local PC/MCPs)
+    if alpaca_client._has_live_credentials():
+        tv_client.refresh_live_market_data()
+        uw_client.refresh_live_flow()
+        alpaca_client.refresh_live_option_quotes()
     exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
         alpaca_client
         if not settings.robinhood_trading_enabled

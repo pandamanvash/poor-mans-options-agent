@@ -197,6 +197,82 @@ class AlpacaPaperClient:
             logger.warning("Alpaca /v2/orders fetch warning: %s", exc)
             return []
 
+    def refresh_live_option_quotes(self) -> int:
+        """
+        Cloud-native Alpaca Options Market Data refresh (no local computer needed):
+        Updates bid/ask/mark/delta/IV on spread_candidates directly from
+        https://data.alpaca.markets/v1beta1/options/snapshots.
+        """
+        if not self._has_live_credentials():
+            return 0
+        updated = 0
+        with httpx.Client(timeout=8.0) as client:
+            for key, cand in list(self.spread_candidates.items()):
+                short_occ = build_occ_symbol(
+                    cand.ticker, cand.expiration_date, cand.short_leg.option_type, cand.short_leg.strike_price
+                )
+                long_occ = build_occ_symbol(
+                    cand.ticker, cand.expiration_date, cand.long_leg.option_type, cand.long_leg.strike_price
+                )
+                try:
+                    resp = client.get(
+                        "https://data.alpaca.markets/v1beta1/options/snapshots",
+                        headers=self._headers(),
+                        params={"symbols": f"{short_occ},{long_occ}"},
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    snaps = resp.json().get("snapshots") or {}
+                    s_snap = snaps.get(short_occ) or {}
+                    l_snap = snaps.get(long_occ) or {}
+                    if s_snap and l_snap:
+                        s_q = s_snap.get("latestQuote") or {}
+                        l_q = l_snap.get("latestQuote") or {}
+                        s_g = s_snap.get("greeks") or {}
+                        l_g = l_snap.get("greeks") or {}
+                        s_bid = float(s_q.get("bp") or cand.short_leg.bid)
+                        s_ask = float(s_q.get("ap") or cand.short_leg.ask)
+                        l_bid = float(l_q.get("bp") or cand.long_leg.bid)
+                        l_ask = float(l_q.get("ap") or cand.long_leg.ask)
+                        from src.mcp_clients.robinhood import OptionLegQuote
+
+                        cand.short_leg = OptionLegQuote(
+                            instrument_id=short_occ,
+                            symbol=cand.ticker,
+                            expiration_date=cand.expiration_date,
+                            dte=cand.dte,
+                            strike_price=cand.short_leg.strike_price,
+                            option_type=cand.short_leg.option_type,
+                            bid=s_bid,
+                            ask=s_ask,
+                            mark=round((s_bid + s_ask) / 2.0, 2),
+                            delta=float(s_g.get("delta") or cand.short_leg.delta),
+                            implied_volatility=float(
+                                s_snap.get("impliedVolatility") or cand.short_leg.implied_volatility
+                            ),
+                            open_interest=cand.short_leg.open_interest,
+                        )
+                        cand.long_leg = OptionLegQuote(
+                            instrument_id=long_occ,
+                            symbol=cand.ticker,
+                            expiration_date=cand.expiration_date,
+                            dte=cand.dte,
+                            strike_price=cand.long_leg.strike_price,
+                            option_type=cand.long_leg.option_type,
+                            bid=l_bid,
+                            ask=l_ask,
+                            mark=round((l_bid + l_ask) / 2.0, 2),
+                            delta=float(l_g.get("delta") or cand.long_leg.delta),
+                            implied_volatility=float(
+                                l_snap.get("impliedVolatility") or cand.long_leg.implied_volatility
+                            ),
+                            open_interest=cand.long_leg.open_interest,
+                        )
+                        updated += 1
+                except Exception as exc:
+                    logger.info("Alpaca options snapshot refresh fallback for %s: %s", key, exc)
+        return updated
+
     def get_portfolio_summary(self) -> dict[str, float | str]:
         return {
             "broker": "alpaca_paper",

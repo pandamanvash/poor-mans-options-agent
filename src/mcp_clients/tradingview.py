@@ -1,7 +1,70 @@
 from __future__ import annotations
 
+import logging
+import math
 from dataclasses import dataclass
 from enum import Enum
+from typing import Sequence
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+def _compute_ema(values: Sequence[float], period: int) -> float:
+    if not values:
+        return 0.0
+    k = 2.0 / (period + 1)
+    ema = float(values[0])
+    for v in values[1:]:
+        ema = float(v) * k + ema * (1.0 - k)
+    return round(ema, 4)
+
+
+def _compute_rsi(values: Sequence[float], period: int = 14) -> float:
+    if len(values) < period + 1:
+        return 50.0
+    gains, losses = [], []
+    for i in range(1, len(values)):
+        diff = values[i] - values[i - 1]
+        gains.append(max(diff, 0.0))
+        losses.append(max(-diff, 0.0))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 2)
+
+
+def _compute_atr(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], period: int = 14) -> float:
+    if len(closes) < 2:
+        return 1.0
+    trs = []
+    for i in range(1, len(closes)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        trs.append(tr)
+    window = trs[-period:] if len(trs) >= period else trs
+    return round(sum(window) / max(1, len(window)), 2)
+
+
+def _fetch_yahoo_chart_bars(symbol: str, interval: str = "1d", range_str: str = "6mo") -> dict[str, list[float]]:
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; OptionsAgent/1.0)"}
+    with httpx.Client(timeout=6.0) as client:
+        resp = client.get(url, params={"interval": interval, "range": range_str}, headers=headers)
+        resp.raise_for_status()
+        result = resp.json()["chart"]["result"][0]
+        quote = result["indicators"]["quote"][0]
+        opens = [float(x) for x in quote.get("open", []) if x is not None]
+        highs = [float(x) for x in quote.get("high", []) if x is not None]
+        lows = [float(x) for x in quote.get("low", []) if x is not None]
+        closes = [float(x) for x in quote.get("close", []) if x is not None]
+        return {"open": opens, "high": highs, "low": lows, "close": closes}
 
 
 class VixRegime(str, Enum):
@@ -222,6 +285,80 @@ class TradingViewClient:
 
     def get_vix_snapshot(self) -> VixMarketSnapshot:
         return self._vix_snapshot
+
+    def refresh_live_market_data(self, tickers: Sequence[str] | None = None) -> dict[str, bool]:
+        """
+        Cloud-native live market data refresh (no local computer or TradingView MCP needed):
+        Fetches live ^VIX, ^VIX3M, and equity OHLCV bars over HTTPS to compute EMAs,
+        Bollinger Bands, RSI, ATR, and S/R levels directly inside Render.
+        """
+        status: dict[str, bool] = {"vix": False}
+        try:
+            vix_bars = _fetch_yahoo_chart_bars("^VIX", interval="1h", range_str="1mo")
+            vix3m_bars = _fetch_yahoo_chart_bars("^VIX3M", interval="1h", range_str="1mo")
+            vc = vix_bars["close"]
+            vh = vix_bars["high"]
+            v3c = vix3m_bars["close"]
+            if len(vc) >= 20 and len(v3c) >= 1:
+                vix_price = round(vc[-1], 2)
+                vix3m_price = round(v3c[-1], 2)
+                ema20 = _compute_ema(vc[-60:], 20)
+                w20 = vc[-20:]
+                mean20 = sum(w20) / len(w20)
+                std20 = math.sqrt(sum((x - mean20) ** 2 for x in w20) / len(w20)) or 1.0
+                upper_bb = round(mean20 + 2.0 * std20, 2)
+                lower_bb = round(mean20 - 2.0 * std20, 2)
+                rsi_4h = _compute_rsi(vc[::4] if len(vc) >= 60 else vc, 14)
+                slope_1h = round(vc[-1] - vc[-2], 2)
+                zscore_20d = round((vix_price - mean20) / std20, 2)
+                rej_wick = bool(vh and (vh[-1] - vc[-1]) >= 0.40)
+                self._vix_snapshot = VixMarketSnapshot(
+                    vix_price=vix_price,
+                    vix3m_price=vix3m_price,
+                    vix_ema20=round(ema20, 2),
+                    vix_upper_bb=upper_bb,
+                    vix_lower_bb=lower_bb,
+                    vix_4h_rsi=rsi_4h,
+                    vix_1h_slope=slope_1h,
+                    vix_zscore_20d=zscore_20d,
+                    printed_rejection_wick=rej_wick,
+                    bullish_divergence_at_floor=rsi_4h < 35.0 and slope_1h > 0,
+                )
+                status["vix"] = True
+        except Exception as exc:
+            logger.info("Cloud VIX refresh fallback (using last snapshot): %s", exc)
+
+        target_tickers = list(tickers or self._structures.keys())
+        for sym in target_tickers:
+            try:
+                daily = _fetch_yahoo_chart_bars(sym, interval="1d", range_str="1y")
+                hourly = _fetch_yahoo_chart_bars(sym, interval="1h", range_str="1mo")
+                dc, dh, dl = daily["close"], daily["high"], daily["low"]
+                hc = hourly["close"]
+                if len(dc) >= 50 and len(hc) >= 20:
+                    price = round(hc[-1], 2)
+                    ema50 = _compute_ema(dc, 50)
+                    ema200 = _compute_ema(dc, min(200, len(dc)))
+                    rsi_4h = _compute_rsi(hc[::4] if len(hc) >= 60 else hc, 14)
+                    atr_14 = _compute_atr(dh, dl, dc, 14)
+                    support_poc = round(min(dl[-20:]), 2)
+                    resistance_ceil = round(max(dh[-20:]), 2)
+                    self._structures[sym.upper()] = TechnicalStructure(
+                        ticker=sym.upper(),
+                        price=price,
+                        daily_ema50=round(ema50, 2),
+                        daily_ema200=round(ema200, 2),
+                        rsi_4h=rsi_4h,
+                        atr_14=atr_14,
+                        horizontal_support_poc=support_poc,
+                        horizontal_resistance_ceiling=resistance_ceil,
+                        last_1h_close=price,
+                    )
+                    status[sym.upper()] = True
+            except Exception as exc:
+                logger.info("Cloud technicals refresh fallback for %s: %s", sym, exc)
+                status[sym.upper()] = False
+        return status
 
     def analyze_vix_regime(self) -> VixRegimeAnalysis:
         return classify_vix_regime(self._vix_snapshot)

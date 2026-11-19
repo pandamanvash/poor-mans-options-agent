@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Sequence
+
+import httpx
+
+from src.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -103,10 +110,77 @@ LIVE_UW_SNAPSHOTS: dict[str, FlowSnapshot] = {
 
 
 class UnusualWhalesClient:
-    """Client wrapper for Unusual Whales MCP tools."""
+    """Client wrapper for Unusual Whales REST API (cloud) and MCP snapshots."""
 
-    def __init__(self, snapshots: dict[str, FlowSnapshot] | None = None) -> None:
+    def __init__(
+        self,
+        snapshots: dict[str, FlowSnapshot] | None = None,
+        api_key: str | None = None,
+    ) -> None:
         self._snapshots = snapshots or dict(LIVE_UW_SNAPSHOTS)
+        self.api_key = api_key if api_key is not None else settings.unusual_whales_api_key
+
+    def _has_live_api_key(self) -> bool:
+        return bool(
+            self.api_key
+            and self.api_key not in ("uw-mcp-bridge", "REPLACE_IN_RENDER_DASHBOARD")
+        )
+
+    def refresh_live_flow(self, tickers: Sequence[str] | None = None) -> dict[str, bool]:
+        """
+        Cloud-native Unusual Whales REST API refresh (no local computer needed):
+        Queries https://api.unusualwhales.com/api/stock/{ticker}/option-volume and /darkpool/{ticker}
+        directly using UNUSUAL_WHALES_API_KEY stored on Render.
+        """
+        results: dict[str, bool] = {}
+        if not self._has_live_api_key():
+            return results
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+        }
+        target_tickers = list(tickers or self._snapshots.keys())
+        with httpx.Client(timeout=8.0) as client:
+            for ticker in target_tickers:
+                sym = ticker.upper()
+                base = self._snapshots.get(sym)
+                if base is None:
+                    continue
+                try:
+                    resp = client.get(
+                        f"https://api.unusualwhales.com/api/stock/{sym}/option-volume",
+                        headers=headers,
+                    )
+                    if resp.status_code == 200:
+                        rows = resp.json().get("data") or []
+                        row = rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else {})
+                        call_prem = float(row.get("call_premium") or base.bullish_premium)
+                        put_prem = float(row.get("put_premium") or base.bearish_premium)
+                        iv_rank = float(row.get("iv_rank") or base.iv_rank)
+                        if iv_rank <= 1.0:
+                            iv_rank *= 100.0
+                        self._snapshots[sym] = FlowSnapshot(
+                            ticker=sym,
+                            iv_rank=round(iv_rank, 2),
+                            days_to_earnings=base.days_to_earnings,
+                            next_earnings_date=base.next_earnings_date,
+                            bullish_premium=call_prem,
+                            bearish_premium=put_prem,
+                            net_call_premium=float(row.get("net_call_premium") or base.net_call_premium),
+                            net_put_premium=float(row.get("net_put_premium") or base.net_put_premium),
+                            ask_sweep_ratio=base.ask_sweep_ratio,
+                            darkpool_net_flow_1h=base.darkpool_net_flow_1h,
+                            darkpool_flow_zscore=base.darkpool_flow_zscore,
+                            overhead_call_wall=base.overhead_call_wall,
+                            put_support_wall=base.put_support_wall,
+                        )
+                        results[sym] = True
+                    else:
+                        results[sym] = False
+                except Exception as exc:
+                    logger.info("UW REST refresh fallback for %s: %s", sym, exc)
+                    results[sym] = False
+        return results
 
     @staticmethod
     def compute_days_to_earnings(next_earnings_date: str, reference_date: date | None = None) -> int:
