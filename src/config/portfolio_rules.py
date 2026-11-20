@@ -494,15 +494,21 @@ def calculate_dynamic_profit_target_pct(
     short_delta: float,
     dist_to_sr_atr: float = 0.50,
     version: str = DEFAULT_STRATEGY_VERSION,
+    uw_darkpool_flow_zscore: float | None = None,
 ) -> float:
     """
     Compute velocity-adjusted take-profit fraction (0.42 fast / 0.50 standard / 0.625-0.65 runner).
     """
+    effective_dp_z = (
+        uw_darkpool_flow_zscore
+        if uw_darkpool_flow_zscore is not None
+        else (1.1 if dist_to_sr_atr >= 0.80 else 0.4)
+    )
     pct, _, _ = calculate_velocity_take_profit_target(
         entry_credit=1.60,
         days_held=days_held,
         current_abs_delta=abs(short_delta),
-        favorable_flow_zscore=1.1 if dist_to_sr_atr >= 0.80 else 0.4,
+        favorable_flow_zscore=effective_dp_z,
         dist_to_sr_atr=dist_to_sr_atr,
         version=version,
     )
@@ -534,7 +540,8 @@ def calculate_velocity_take_profit_target(
 
     if (
         abs(current_abs_delta) <= profile.runner_max_abs_delta
-        and (favorable_flow_zscore >= 0.80 or dist_to_sr_atr >= 0.80)
+        and dist_to_sr_atr >= 0.80
+        and favorable_flow_zscore >= 1.0
     ):
         pct = profile.runner_profit_target_pct
         close_px = round(entry_credit * (1.0 - pct), 2)
@@ -555,15 +562,21 @@ def evaluate_ml_entry_expectancy(
     uw_sweep_ratio: float,
     dist_to_sr_atr: float,
     version: str = DEFAULT_STRATEGY_VERSION,
+    vix_4h_rsi: float = 55.0,
+    dte: int = 35,
 ) -> tuple[bool, float, str]:
     """
     Loop 5 (`v5`) ML Counterfactual Ensemble Entry Expectancy Gate.
-    Implements the exact composite logistic win-probability score P(Win | x) from Section 2 Loop 5:
-      z(x) = 1.45 + 0.65*DP_ZScore + 0.55*Dist_ATR + 1.20*(SweepRatio - 0.60)
-             - 2.10*max(0, TS_Ratio - 0.94) - 1.80*(|Delta_0| - 0.24)
+    Implements the composite logistic win-probability score P(Win | x) using calibrated feature
+    weights across short_delta, uw_darkpool_flow_zscore, dist_to_tv_sr_atr, vix_4h_rsi,
+    uw_ask_sweep_ratio, dte, and vix_term_structure_ratio.
     """
     profile = get_strategy_profile(version)
     abs_delta = abs(short_delta)
+
+    # Calibrated vix_4h_rsi & dte adjustments (centered at 55.0 RSI and 35 DTE for backward compatibility)
+    vix_rsi_adj = 0.01 * max(0.0, min(20.0, vix_4h_rsi - 55.0))
+    dte_adj = -0.015 * abs(dte - 35)
 
     z_score = (
         1.45
@@ -573,6 +586,8 @@ def evaluate_ml_entry_expectancy(
         - 2.10 * max(0.0, vix_term_ratio - 0.94)
         - 1.80 * (abs_delta - 0.24)
         + 2.50 * (credit_to_width - 0.32)
+        + vix_rsi_adj
+        + dte_adj
     )
     if vix_term_ratio > 0.96 and vix_1h_slope > 0.10:
         z_score -= 1.25

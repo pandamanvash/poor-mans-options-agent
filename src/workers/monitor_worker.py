@@ -33,6 +33,7 @@ class PositionStressInput:
     vix_4h_rsi: float
     vix_1h_slope: float
     prev_short_delta: float | None = None
+    dt_days: float = 1.0
     days_held: int = 7
     version: str = DEFAULT_STRATEGY_VERSION
 
@@ -44,7 +45,7 @@ class PositionStressInput:
     def delta_velocity_1d(self) -> float:
         if self.prev_short_delta is None:
             return 0.0
-        return round(abs(self.short_delta) - abs(self.prev_short_delta), 4)
+        return round((abs(self.short_delta) - abs(self.prev_short_delta)) / max(0.25, self.dt_days), 4)
 
     @property
     def vix_term_structure_ratio(self) -> float:
@@ -269,10 +270,12 @@ class PositionMonitorWorker:
 
         # 7. Phantom Vega Protection (Bull Puts) & Spot-Up / VIX-Up Exhaustion (Bear Calls)
         if is_stress:
+            phantom_rsi_min = float(self.thresholds.get("vix_phantom_vega_4h_rsi_min", 68.0))
             if (
                 pos.strategy == "BULL_PUT_SPREAD"
-                and pos.tv_1h_close >= pos.tv_sr_level
-                and pos.vix_4h_rsi > float(self.thresholds.get("vix_phantom_vega_4h_rsi_min", 70.0))
+                and pos.dist_to_tv_sr_atr >= 0.10
+                and pos.vix_4h_rsi >= phantom_rsi_min
+                and pos.delta_velocity_1d < 0.07
             ):
                 return MonitorDecision(
                     action="HOLD_LOOSE_PHANTOM_VEGA",
@@ -280,8 +283,10 @@ class PositionMonitorWorker:
                     tv_1h_close_breach=False,
                     is_stress_event=True,
                     rationale=(
-                        f"Phantom Vega Drawdown: {pos.ticker} 1H close ${pos.tv_1h_close:.2f} holds above "
-                        f"support ${pos.tv_sr_level:.2f} while VIX 4H RSI={pos.vix_4h_rsi:.1f} > 70. HOLD LOOSE."
+                        f"Phantom Vega Drawdown: {pos.ticker} 1H close ${pos.tv_1h_close:.2f} holds "
+                        f"{pos.dist_to_tv_sr_atr:.2f} ATR (>= 0.10) above support ${pos.tv_sr_level:.2f}, "
+                        f"VIX 4H RSI={pos.vix_4h_rsi:.1f} >= {phantom_rsi_min:.1f}, "
+                        f"dDelta/dt={pos.delta_velocity_1d:+.3f} < 0.07. HOLD LOOSE."
                     ),
                 )
 

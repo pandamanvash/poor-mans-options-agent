@@ -197,6 +197,22 @@ class ScreenerJob:
                     4,
                 )
 
+            if (
+                profile.enable_regime_slope_filter
+                and not panic_regime
+                and dist_to_sr_atr < profile.min_dist_to_sr_atr
+            ):
+                rejected_candidates.append(
+                    {
+                        "key": key,
+                        "reason": (
+                            f"Loop 1 Structural Buffer Guard ({active_version}): "
+                            f"dist_to_sr_atr={dist_to_sr_atr:.2f} < {profile.min_dist_to_sr_atr:.2f} ATR"
+                        ),
+                    }
+                )
+                continue
+
             # Loop 5 (v5): Pre-Entry ML Counterfactual Expectancy Gate
             credit_to_width = round(candidate.mid_credit / max(0.01, candidate.spread_width), 4)
             ml_ok, ml_win_prob, ml_reason = evaluate_ml_entry_expectancy(
@@ -209,6 +225,8 @@ class ScreenerJob:
                 uw_sweep_ratio=flow_snap.ask_sweep_ratio,
                 dist_to_sr_atr=dist_to_sr_atr,
                 version=active_version,
+                vix_4h_rsi=vix_snapshot.vix_4h_rsi,
+                dte=candidate.dte,
             )
             if not ml_ok:
                 rejected_candidates.append({"key": key, "reason": ml_reason})

@@ -228,13 +228,14 @@ class UnusualWhalesClient:
             return False, f"Earnings hazard: {snap.days_to_earnings}d < 40d minimum"
         if snap.iv_rank < min_iv_rank:
             return False, f"IV Rank {snap.iv_rank:.1f}% < {min_iv_rank:.1f}%"
-        has_bullish_flow = snap.bullish_premium >= snap.bearish_premium or snap.ask_sweep_ratio >= 0.65
+        prem_ratio = snap.bullish_premium / max(1.0, snap.bearish_premium)
+        has_bullish_flow = snap.ask_sweep_ratio >= 0.65 or prem_ratio >= 1.08
         has_non_negative_dp = snap.darkpool_net_flow_1h >= 0.0
         if not (has_bullish_flow and has_non_negative_dp):
             return False, "Institutional flow or dark pool accumulation not confirmed"
         return True, (
             f"IVR={snap.iv_rank:.1f}%, Earnings={snap.days_to_earnings}d, "
-            f"AskSweepRatio={snap.ask_sweep_ratio:.2f}, DP_1H=+${snap.darkpool_net_flow_1h:,.0f}"
+            f"AskSweepRatio={snap.ask_sweep_ratio:.2f}, Bull/Bear={prem_ratio:.2f}x, DP_1H=+${snap.darkpool_net_flow_1h:,.0f}"
         )
 
     def validate_bear_call_flow(self, ticker: str, min_iv_rank: float = 40.0) -> tuple[bool, str]:
@@ -243,12 +244,17 @@ class UnusualWhalesClient:
             return False, f"Earnings hazard: {snap.days_to_earnings}d < 40d minimum"
         if snap.iv_rank < min_iv_rank:
             return False, f"IV Rank {snap.iv_rank:.1f}% < {min_iv_rank:.1f}%"
-        has_distribution = snap.bearish_premium > snap.bullish_premium or snap.darkpool_net_flow_1h < 0
+        bear_ratio = snap.bearish_premium / max(1.0, snap.bullish_premium)
+        has_distribution = (
+            snap.ask_sweep_ratio >= 0.65
+            or bear_ratio >= 1.08
+            or snap.darkpool_net_flow_1h < 0
+        )
         if not has_distribution:
             return False, "No institutional distribution or overhead hedge flow detected"
         return True, (
             f"IVR={snap.iv_rank:.1f}%, Earnings={snap.days_to_earnings}d, "
-            f"CallWall=${snap.overhead_call_wall:.0f}, DP_1H=${snap.darkpool_net_flow_1h:,.0f}"
+            f"Bear/Bull={bear_ratio:.2f}x, CallWall=${snap.overhead_call_wall:.0f}, DP_1H=${snap.darkpool_net_flow_1h:,.0f}"
         )
 
     def screen_candidates(self) -> list[dict[str, Any]]:
