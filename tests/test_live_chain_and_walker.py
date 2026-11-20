@@ -1,0 +1,183 @@
+from __future__ import annotations
+
+import unittest
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
+
+from src.mcp_clients.alpaca import AlpacaPaperClient, _extract_alpaca_uuid
+from src.mcp_clients.tradingview import TechnicalStructure, TradingViewClient
+
+
+class _FakeResp:
+    def __init__(self, status_code: int, payload: dict | list) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = str(payload)
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class TestLiveChainAndWalker(unittest.TestCase):
+    def test_extract_alpaca_uuid(self) -> None:
+        uid = "12345678-1234-5678-1234-567812345678"
+        self.assertEqual(_extract_alpaca_uuid(f"alpaca-{uid}"), uid)
+        self.assertEqual(_extract_alpaca_uuid(uid), uid)
+        self.assertIsNone(_extract_alpaca_uuid("alpaca-abcdef123456"))
+
+    def test_regime4_bear_call_validation_allows_downtrend_with_atr_cushion(self) -> None:
+        tv = TradingViewClient(
+            structures={
+                "SPY": TechnicalStructure(
+                    ticker="SPY",
+                    price=580.0,
+                    daily_ema50=592.0,
+                    daily_ema200=560.0,
+                    rsi_4h=42.0,
+                    atr_14=8.5,
+                    horizontal_support_poc=570.0,
+                    horizontal_resistance_ceiling=602.0,
+                    last_1h_close=580.0,
+                )
+            }
+        )
+        # Normal regime rejects because 4H RSI <= 68
+        ok_norm, _ = tv.validate_bear_call_structure("SPY", 595.0, panic_regime=False)
+        self.assertFalse(ok_norm)
+
+        # Panic regime allows downtrending stock with >= 1 ATR cushion ($580 + $8.5 = $588.5 <= $595)
+        ok_panic, reason = tv.validate_bear_call_structure("SPY", 595.0, panic_regime=True)
+        self.assertTrue(ok_panic, reason)
+
+        # Panic regime rejects strike too close to spot (< 1 ATR and below resistance)
+        ok_tight, _ = tv.validate_bear_call_structure("SPY", 584.0, panic_regime=True)
+        self.assertFalse(ok_tight)
+
+    @patch("src.mcp_clients.alpaca.httpx.Client")
+    def test_scan_live_option_chains_selects_fresh_delta_spreads(self, mock_client_cls: MagicMock) -> None:
+        mock_http = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_http
+
+        contracts_resp = _FakeResp(
+            200,
+            {
+                "option_contracts": [
+                    {"symbol": "SPY261224P00560000", "type": "put", "strike_price": "560", "expiration_date": "2026-12-24", "open_interest": "1200"},
+                    {"symbol": "SPY261224P00555000", "type": "put", "strike_price": "555", "expiration_date": "2026-12-24", "open_interest": "900"},
+                    {"symbol": "SPY261224C00605000", "type": "call", "strike_price": "605", "expiration_date": "2026-12-24", "open_interest": "1500"},
+                    {"symbol": "SPY261224C00610000", "type": "call", "strike_price": "610", "expiration_date": "2026-12-24", "open_interest": "1100"},
+                ]
+            },
+        )
+        snaps_resp = _FakeResp(
+            200,
+            {
+                "snapshots": {
+                    "SPY261224P00560000": {"latestQuote": {"bp": 4.20, "ap": 4.30}, "greeks": {"delta": -0.24}, "impliedVolatility": 0.28},
+                    "SPY261224P00555000": {"latestQuote": {"bp": 2.45, "ap": 2.55}, "greeks": {"delta": -0.17}, "impliedVolatility": 0.29},
+                    "SPY261224C00605000": {"latestQuote": {"bp": 3.80, "ap": 3.90}, "greeks": {"delta": 0.25}, "impliedVolatility": 0.26},
+                    "SPY261224C00610000": {"latestQuote": {"bp": 2.05, "ap": 2.15}, "greeks": {"delta": 0.16}, "impliedVolatility": 0.25},
+                }
+            },
+        )
+        acct_resp = _FakeResp(
+            200,
+            {"account_number": "PA35XZXE8ZZE", "portfolio_value": "10000", "cash": "10000", "options_buying_power": "10000"},
+        )
+
+        def fake_get(url: str, **kwargs):
+            if "/v2/account" in url:
+                return acct_resp
+            if "/v2/options/contracts" in url:
+                return contracts_resp
+            if "/v1beta1/options/snapshots" in url:
+                return snaps_resp
+            raise AssertionError(f"Unexpected GET {url}")
+
+        mock_http.get.side_effect = fake_get
+
+        client = AlpacaPaperClient(api_key="PKTEST", secret_key="SKTEST")
+        scanned = client.scan_live_option_chains(
+            tickers=["SPY"],
+            panic_regime=False,
+            reference_date=date(2026, 11, 19),
+        )
+        self.assertIn("SPY_BULL_PUT", scanned)
+        self.assertIn("SPY_BEAR_CALL", scanned)
+        self.assertEqual(scanned["SPY_BULL_PUT"].short_leg.strike_price, 560.0)
+        self.assertEqual(scanned["SPY_BULL_PUT"].long_leg.strike_price, 555.0)
+        self.assertAlmostEqual(scanned["SPY_BULL_PUT"].mid_credit, 1.75, places=2)
+        self.assertEqual(scanned["SPY_BEAR_CALL"].short_leg.strike_price, 605.0)
+        self.assertEqual(scanned["SPY_BEAR_CALL"].long_leg.strike_price, 610.0)
+        self.assertAlmostEqual(scanned["SPY_BEAR_CALL"].mid_credit, 1.75, places=2)
+
+    @patch("src.mcp_clients.alpaca.httpx.Client")
+    def test_walk_open_live_orders_patches_working_credit_limit(self, mock_client_cls: MagicMock) -> None:
+        mock_http = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_http
+
+        old_uid = "11111111-2222-3333-4444-555555555555"
+        new_uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        created_old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+
+        acct_resp = _FakeResp(
+            200,
+            {"account_number": "PA35XZXE8ZZE", "portfolio_value": "10000", "cash": "10000", "options_buying_power": "10000"},
+        )
+        open_orders_resp = _FakeResp(
+            200,
+            [
+                {
+                    "id": old_uid,
+                    "order_class": "mleg",
+                    "limit_price": "-1.62",
+                    "created_at": created_old,
+                    "legs": [
+                        {"symbol": "AAPL261218C00365000", "side": "sell"},
+                        {"symbol": "AAPL261218C00370000", "side": "buy"},
+                    ],
+                }
+            ],
+        )
+        snaps_resp = _FakeResp(
+            200,
+            {
+                "snapshots": {
+                    "AAPL261218C00365000": {"latestQuote": {"bp": 3.50, "ap": 3.60}},
+                    "AAPL261218C00370000": {"latestQuote": {"bp": 1.95, "ap": 2.05}},
+                }
+            },
+        )
+        patch_resp = _FakeResp(200, {"id": new_uid})
+
+        def fake_get(url: str, **kwargs):
+            if "/v2/account" in url:
+                return acct_resp
+            if "/v2/orders" in url:
+                return open_orders_resp
+            if "/v1beta1/options/snapshots" in url:
+                return snaps_resp
+            raise AssertionError(f"Unexpected GET {url}")
+
+        mock_http.get.side_effect = fake_get
+        mock_http.patch.return_value = patch_resp
+
+        client = AlpacaPaperClient(api_key="PKTEST", secret_key="SKTEST")
+        walked = client.walk_open_live_orders(step_decrement=0.02, min_credit_ratio=0.30)
+
+        self.assertEqual(len(walked), 1)
+        self.assertEqual(walked[0]["old_order_id"], old_uid)
+        self.assertEqual(walked[0]["new_order_id"], new_uid)
+        self.assertEqual(walked[0]["old_credit"], 1.62)
+        self.assertEqual(walked[0]["new_credit"], 1.60)
+        mock_http.patch.assert_called_once()
+        _, kwargs = mock_http.patch.call_args
+        self.assertEqual(kwargs["json"], {"limit_price": "-1.60"})
+
+
+if __name__ == "__main__":
+    unittest.main()

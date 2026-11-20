@@ -127,14 +127,18 @@ class ScreenerJob:
                 continue
 
             # Step 2: Institutional Flow & 40-Day Earnings Filter (Unusual Whales MCP)
-            if strategy == "BULL_PUT_SPREAD":
-                uw_ok, uw_reason = self.uw.validate_bull_put_flow(
-                    ticker, min_iv_rank=profile.iv_rank_min
-                )
-            else:
-                uw_ok, uw_reason = self.uw.validate_bear_call_flow(
-                    ticker, min_iv_rank=profile.iv_rank_min
-                )
+            try:
+                if strategy == "BULL_PUT_SPREAD":
+                    uw_ok, uw_reason = self.uw.validate_bull_put_flow(
+                        ticker, min_iv_rank=profile.iv_rank_min
+                    )
+                else:
+                    uw_ok, uw_reason = self.uw.validate_bear_call_flow(
+                        ticker, min_iv_rank=profile.iv_rank_min
+                    )
+            except KeyError as exc:
+                rejected_candidates.append({"key": key, "reason": f"UW Data Missing: {exc}"})
+                continue
 
             if not uw_ok:
                 rejected_candidates.append({"key": key, "reason": f"UW Filter: {uw_reason}"})
@@ -162,14 +166,18 @@ class ScreenerJob:
                 continue
 
             # Step 3: Technical Structure & Strike Anchoring (TradingView MCP)
-            if strategy == "BULL_PUT_SPREAD":
-                tv_ok, tv_reason = self.tv.validate_bull_put_structure(
-                    ticker, candidate.short_leg.strike_price
-                )
-            else:
-                tv_ok, tv_reason = self.tv.validate_bear_call_structure(
-                    ticker, candidate.short_leg.strike_price
-                )
+            try:
+                if strategy == "BULL_PUT_SPREAD":
+                    tv_ok, tv_reason = self.tv.validate_bull_put_structure(
+                        ticker, candidate.short_leg.strike_price
+                    )
+                else:
+                    tv_ok, tv_reason = self.tv.validate_bear_call_structure(
+                        ticker, candidate.short_leg.strike_price, panic_regime=panic_regime
+                    )
+            except KeyError as exc:
+                rejected_candidates.append({"key": key, "reason": f"TV Data Missing: {exc}"})
+                continue
 
             if not tv_ok:
                 rejected_candidates.append({"key": key, "reason": f"TV Filter: {tv_reason}"})

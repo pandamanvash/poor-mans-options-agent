@@ -415,11 +415,36 @@ class TradingViewClient:
         )
 
     def validate_bear_call_structure(
-        self, ticker: str, proposed_short_call_strike: float
+        self,
+        ticker: str,
+        proposed_short_call_strike: float,
+        panic_regime: bool = False,
     ) -> tuple[bool, str]:
         tech = self.get_technical_structure(ticker)
         overbought_near_ceiling = tech.rsi_4h > 68.0
         strike_above_resistance = proposed_short_call_strike > tech.horizontal_resistance_ceiling
+        strike_above_atr_cushion = proposed_short_call_strike >= (tech.price + tech.atr_14)
+
+        if panic_regime:
+            # In Regime 4 Panic/Backwardation, allow Bear Calls on downtrending or relief-bounce
+            # names as long as the short call is safely above resistance or >= 1.0 ATR OTM.
+            bearish_or_relief_structure = tech.price < tech.daily_ema50 or tech.rsi_4h >= 45.0
+            if not bearish_or_relief_structure:
+                return False, (
+                    f"{ticker} in Regime 4 is oversold above 50-EMA "
+                    f"(price=${tech.price:.2f}, 4H RSI={tech.rsi_4h:.2f})"
+                )
+            if not (strike_above_resistance or strike_above_atr_cushion):
+                return False, (
+                    f"Short call ${proposed_short_call_strike:.2f} needs resistance "
+                    f"(${tech.horizontal_resistance_ceiling:.2f}) or 1-ATR cushion "
+                    f"(${tech.price + tech.atr_14:.2f})"
+                )
+            return True, (
+                f"Regime 4 Bear Call: price=${tech.price:.2f}, 4H RSI={tech.rsi_4h:.2f}, "
+                f"Short Call ${proposed_short_call_strike:.0f} safely OTM "
+                f"(Res=${tech.horizontal_resistance_ceiling:.2f}, ATR=${tech.atr_14:.2f})"
+            )
 
         if not overbought_near_ceiling:
             return False, f"{ticker} 4H RSI {tech.rsi_4h:.2f} <= 68 overbought threshold"

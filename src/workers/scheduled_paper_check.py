@@ -9,9 +9,9 @@ from typing import Any
 from src.config.settings import ExecutionMode, settings
 from src.db.models import ExecutionIntent, Trade
 from src.db.session import LightweightSession, _build_engine, get_db_session, init_db
-from src.mcp_clients.alpaca import AlpacaPaperClient
+from src.mcp_clients.alpaca import DEFAULT_WATCHLIST, AlpacaPaperClient
 from src.mcp_clients.robinhood import DEFAULT_MCP_ACCOUNT_NUMBER, RobinhoodClient
-from src.mcp_clients.tradingview import TradingViewClient
+from src.mcp_clients.tradingview import TradingViewClient, VixRegime
 from src.mcp_clients.unusual_whales import UnusualWhalesClient
 from src.ml_engine.kpi_tracker import StrategyKPITracker
 from src.ml_engine.model_trainer import WeeklyModelTrainer
@@ -44,10 +44,17 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         buying_power=10000.0,
     )
     # Cloud-native live data refresh (works 100% on Render without local PC/MCPs)
+    walked_orders: list[dict[str, Any]] = []
     if alpaca_client._has_live_credentials():
-        tv_client.refresh_live_market_data()
-        uw_client.refresh_live_flow()
-        alpaca_client.refresh_live_option_quotes()
+        tv_client.refresh_live_market_data(tickers=DEFAULT_WATCHLIST)
+        vix_check = tv_client.analyze_vix_regime()
+        is_panic = vix_check.regime == VixRegime.REGIME_4_PANIC_BACKWARDATION
+        uw_client.refresh_live_flow(tickers=DEFAULT_WATCHLIST)
+        alpaca_client.scan_live_option_chains(
+            tickers=DEFAULT_WATCHLIST,
+            panic_regime=is_panic,
+        )
+        walked_orders = alpaca_client.walk_open_live_orders(step_decrement=0.02)
     exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
         alpaca_client
         if not settings.robinhood_trading_enabled
@@ -63,8 +70,9 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         jsonl_path=Path("data/stress_events.jsonl"),
     )
 
+    today_str = datetime.now(timezone.utc).date().isoformat()
     with get_db_session(make_session) as session:
-        screen_res = screener.run_pipeline(session=session)
+        screen_res = screener.run_pipeline(session=session, trade_date=today_str)
         intents = session.query(ExecutionIntent).filter(ExecutionIntent.status == "QUEUED").all()
         filled_trades: list[dict[str, Any]] = []
         for intent in intents:
@@ -156,6 +164,8 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         "account": exec_broker_client.get_portfolio_summary(),
         "vix_regime": screen_res["vix_regime"],
         "vix_summary": screen_res["vix_summary"],
+        "scanned_candidates_count": len(exec_broker_client.spread_candidates),
+        "walked_orders": walked_orders,
         "paper_trades_active": filled_trades,
         "monitor_decisions": monitor_checks,
         "ml_calibration": ml_result,
