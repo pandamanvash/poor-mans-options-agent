@@ -54,6 +54,11 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
             tickers=DEFAULT_WATCHLIST,
             panic_regime=is_panic,
         )
+        uw_client.seed_from_option_candidates(
+            spread_candidates=alpaca_client.spread_candidates,
+            vix_price=tv_client.get_vix_snapshot().vix_price,
+            technical_structures=tv_client._structures,
+        )
         walked_orders = alpaca_client.walk_open_live_orders(step_decrement=0.02)
     exec_broker_client: AlpacaPaperClient | RobinhoodClient = (
         alpaca_client

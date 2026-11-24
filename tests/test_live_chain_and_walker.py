@@ -243,6 +243,47 @@ class TestLiveChainAndWalker(unittest.TestCase):
         _, kwargs = mock_http.patch.call_args
         self.assertEqual(kwargs["json"], {"limit_price": "-1.53"})
 
+    def test_uw_seed_from_option_candidates_populates_missing_tickers(self) -> None:
+        from src.mcp_clients.robinhood import OptionLegQuote, SpreadCandidateQuote
+        from src.mcp_clients.unusual_whales import UnusualWhalesClient
+
+        uw = UnusualWhalesClient()
+        self.assertNotIn("SPY", uw._snapshots)
+        self.assertNotIn("NVDA", uw._snapshots)
+
+        spy_bc = SpreadCandidateQuote(
+            ticker="SPY",
+            strategy="BEAR_CALL_SPREAD",
+            expiration_date="2026-12-31",
+            dte=37,
+            short_leg=OptionLegQuote("SPY261231C00750000", "SPY", "2026-12-31", 37, 750.0, "call", 3.50, 3.60, 3.55, 0.24, 0.26, 1200),
+            long_leg=OptionLegQuote("SPY261231C00755000", "SPY", "2026-12-31", 37, 755.0, "call", 1.80, 1.90, 1.85, 0.16, 0.25, 900),
+        )
+        nvda_bc = SpreadCandidateQuote(
+            ticker="NVDA",
+            strategy="BEAR_CALL_SPREAD",
+            expiration_date="2026-12-31",
+            dte=37,
+            short_leg=OptionLegQuote("NVDA261231C00185000", "NVDA", "2026-12-31", 37, 185.0, "call", 4.10, 4.20, 4.15, 0.25, 0.58, 2500),
+            long_leg=OptionLegQuote("NVDA261231C00190000", "NVDA", "2026-12-31", 37, 190.0, "call", 2.35, 2.45, 2.40, 0.17, 0.56, 1800),
+        )
+        techs = {
+            "SPY": TechnicalStructure("SPY", 722.0, 752.0, 737.0, 42.6, 18.4, 686.0, 775.0, 722.0),
+            "NVDA": TechnicalStructure("NVDA", 165.0, 194.0, 202.0, 48.5, 15.6, 124.0, 220.0, 165.0),
+        }
+        seeded = uw.seed_from_option_candidates(
+            {"SPY_BEAR_CALL": spy_bc, "NVDA_BEAR_CALL": nvda_bc},
+            vix_price=28.60,
+            technical_structures=techs,
+        )
+        self.assertIn("SPY", seeded)
+        self.assertIn("NVDA", seeded)
+        spy_snap = uw.get_flow_snapshot("SPY")
+        self.assertEqual(spy_snap.days_to_earnings, 999)
+        self.assertGreaterEqual(spy_snap.iv_rank, 42.0)
+        bc_ok, _ = uw.validate_bear_call_flow("SPY", min_iv_rank=42.0)
+        self.assertTrue(bc_ok)
+
 
 if __name__ == "__main__":
     unittest.main()
