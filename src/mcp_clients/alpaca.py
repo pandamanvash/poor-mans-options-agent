@@ -515,9 +515,14 @@ class AlpacaPaperClient:
                     snaps = s_resp.json().get("snapshots") or {}
                     s_q = (snaps.get(sell_sym) or {}).get("latestQuote") or {}
                     b_q = (snaps.get(buy_sym) or {}).get("latestQuote") or {}
-                    s_mid = (float(s_q.get("bp") or 0) + float(s_q.get("ap") or 0)) / 2.0
-                    b_mid = (float(b_q.get("bp") or 0) + float(b_q.get("ap") or 0)) / 2.0
+                    s_bid = float(s_q.get("bp") or 0)
+                    s_ask = float(s_q.get("ap") or 0)
+                    b_bid = float(b_q.get("bp") or 0)
+                    b_ask = float(b_q.get("ap") or 0)
+                    s_mid = (s_bid + s_ask) / 2.0
+                    b_mid = (b_bid + b_ask) / 2.0
                     live_mid_credit = round(s_mid - b_mid, 2)
+                    live_natural_credit = round(s_bid - b_ask, 2)
                     if live_mid_credit <= 0:
                         continue
 
@@ -527,10 +532,20 @@ class AlpacaPaperClient:
                     spread_width = abs(s_strike - b_strike)
                     min_credit_floor = round(spread_width * min_credit_ratio, 2)
 
+                    # Alpaca Paper does not simulate midpoint price improvement on mleg orders;
+                    # walk down toward natural_credit (short_bid - long_ask) on paper-api while
+                    # strictly respecting min_credit_floor.
+                    is_paper_api = "paper-api" in self.base_url.lower()
+                    target_credit = (
+                        live_natural_credit
+                        if (is_paper_api and live_natural_credit > 0)
+                        else live_mid_credit
+                    )
+
                     current_credit = round(abs(limit_val), 2)
-                    if current_credit <= live_mid_credit:
+                    if current_credit <= target_credit:
                         continue
-                    new_credit = round(max(live_mid_credit, current_credit - step_decrement), 2)
+                    new_credit = round(max(target_credit, current_credit - step_decrement), 2)
                     if new_credit < min_credit_floor or new_credit >= current_credit:
                         continue
 

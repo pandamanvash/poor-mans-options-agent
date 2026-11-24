@@ -65,6 +65,11 @@ class ScreenerJob:
         vix_snapshot = self.tv.get_vix_snapshot()
         vix_analysis = self.tv.analyze_vix_regime()
         panic_regime = vix_analysis.regime == VixRegime.REGIME_4_PANIC_BACKWARDATION
+        effective_max_spread = (
+            0.25
+            if (panic_regime or vix_snapshot.vix_price > 25.0)
+            else PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd
+        )
 
         portfolio = self.rh.get_portfolio_summary()
         account_value = float(portfolio["total_value"])
@@ -247,6 +252,7 @@ class ScreenerJob:
                 trade_date=trade_date,
                 version=active_version,
                 ml_win_prob=ml_win_prob,
+                max_bid_ask_spread_usd=effective_max_spread,
             )
             if intent is not None:
                 queued_intents.append(intent)
@@ -295,6 +301,7 @@ class ScreenerJob:
         trade_date: str,
         version: str = DEFAULT_STRATEGY_VERSION,
         ml_win_prob: float | None = None,
+        max_bid_ask_spread_usd: float | None = None,
     ) -> ExecutionIntent | None:
         if not (
             PORTFOLIO_CONSTRAINTS.vertical_min_dte
@@ -302,7 +309,12 @@ class ScreenerJob:
             <= PORTFOLIO_CONSTRAINTS.vertical_max_dte
         ):
             return None
-        if candidate.net_bid_ask_spread > PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd:
+        spread_cap = (
+            max_bid_ask_spread_usd
+            if max_bid_ask_spread_usd is not None
+            else PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd
+        )
+        if candidate.net_bid_ask_spread > spread_cap:
             return None
 
         try:

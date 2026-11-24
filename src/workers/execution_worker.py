@@ -107,8 +107,14 @@ class ExecutionWorker:
             intent.status = "REJECTED"
             return None
 
-        # Pre-flight Guard 1: bid_ask_spread <= $0.15
-        if intent.bid_ask_spread > PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd:
+        # Pre-flight Guard 1: bid_ask_spread <= $0.15 (or <= $0.25 in high-VIX > 25 / panic regimes)
+        vix_now = self.tv.get_vix_snapshot().vix_price
+        spread_cap = (
+            0.25
+            if (vix_now > 25.0 or intent.vix_regime == "REGIME_4_PANIC_BACKWARDATION")
+            else PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd
+        )
+        if intent.bid_ask_spread > spread_cap:
             intent.status = "REJECTED"
             return None
 

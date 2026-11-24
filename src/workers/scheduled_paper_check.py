@@ -165,6 +165,10 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         "vix_regime": screen_res["vix_regime"],
         "vix_summary": screen_res["vix_summary"],
         "scanned_candidates_count": len(exec_broker_client.spread_candidates),
+        "evaluated_candidates_summary": {
+            "queued": screen_res.get("queued_intents", []),
+            "rejected": screen_res.get("rejected_candidates", []),
+        },
         "walked_orders": walked_orders,
         "paper_trades_active": filled_trades,
         "monitor_decisions": monitor_checks,

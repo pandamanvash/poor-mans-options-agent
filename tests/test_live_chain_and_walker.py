@@ -178,6 +178,71 @@ class TestLiveChainAndWalker(unittest.TestCase):
         _, kwargs = mock_http.patch.call_args
         self.assertEqual(kwargs["json"], {"limit_price": "-1.60"})
 
+    @patch("src.mcp_clients.alpaca.httpx.Client")
+    def test_walk_open_live_orders_crosses_mid_toward_natural_on_paper_api(self, mock_client_cls: MagicMock) -> None:
+        mock_http = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_http
+
+        old_uid = "11111111-2222-3333-4444-555555555555"
+        new_uid = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+        created_old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+
+        acct_resp = _FakeResp(
+            200,
+            {"account_number": "PA35XZXE8ZZE", "portfolio_value": "10000", "cash": "10000", "options_buying_power": "10000"},
+        )
+        # Resting order is ALREADY at live mid (-1.55), while natural credit = 3.50 - 2.05 = 1.45
+        open_orders_resp = _FakeResp(
+            200,
+            [
+                {
+                    "id": old_uid,
+                    "order_class": "mleg",
+                    "limit_price": "-1.55",
+                    "created_at": created_old,
+                    "legs": [
+                        {"symbol": "AAPL261218C00365000", "side": "sell"},
+                        {"symbol": "AAPL261218C00370000", "side": "buy"},
+                    ],
+                }
+            ],
+        )
+        snaps_resp = _FakeResp(
+            200,
+            {
+                "snapshots": {
+                    "AAPL261218C00365000": {"latestQuote": {"bp": 3.50, "ap": 3.60}},
+                    "AAPL261218C00370000": {"latestQuote": {"bp": 1.95, "ap": 2.05}},
+                }
+            },
+        )
+        patch_resp = _FakeResp(200, {"id": new_uid})
+
+        def fake_get(url: str, **kwargs):
+            if "/v2/account" in url:
+                return acct_resp
+            if "/v2/orders" in url:
+                return open_orders_resp
+            if "/v1beta1/options/snapshots" in url:
+                return snaps_resp
+            raise AssertionError(f"Unexpected GET {url}")
+
+        mock_http.get.side_effect = fake_get
+        mock_http.patch.return_value = patch_resp
+
+        client = AlpacaPaperClient(
+            api_key="PKTEST",
+            secret_key="SKTEST",
+            base_url="https://paper-api.alpaca.markets",
+        )
+        walked = client.walk_open_live_orders(step_decrement=0.02, min_credit_ratio=0.30)
+
+        self.assertEqual(len(walked), 1)
+        self.assertEqual(walked[0]["old_credit"], 1.55)
+        self.assertEqual(walked[0]["new_credit"], 1.53)
+        _, kwargs = mock_http.patch.call_args
+        self.assertEqual(kwargs["json"], {"limit_price": "-1.53"})
+
 
 if __name__ == "__main__":
     unittest.main()
