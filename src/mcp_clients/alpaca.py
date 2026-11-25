@@ -35,6 +35,15 @@ def _extract_alpaca_uuid(order_id: str) -> str | None:
     return raw if _UUID_RE.match(raw) else None
 
 
+def is_third_friday_opex(exp_date_str: str) -> bool:
+    """Return True if YYYY-MM-DD is a standard monthly 3rd-Friday OPEX (day 15..21, Friday)."""
+    try:
+        dt = datetime.strptime(exp_date_str, "%Y-%m-%d").date()
+        return dt.weekday() == 4 and 15 <= dt.day <= 21
+    except ValueError:
+        return False
+
+
 def build_occ_symbol(
     ticker: str,
     expiration_date: str,
@@ -296,19 +305,22 @@ class AlpacaPaperClient:
     def scan_live_option_chains(
         self,
         tickers: Sequence[str] | None = None,
-        min_dte: int = 28,
-        max_dte: int = 45,
+        min_dte: int = 21,
+        max_dte: int = 55,
         preferred_widths: Sequence[float] = (5.0, 10.0),
         target_delta_min: float = 0.18,
         target_delta_max: float = 0.30,
         panic_regime: bool = False,
         reference_date: date | None = None,
+        max_single_leg_spread: float = 0.45,
+        min_natural_credit_ratio: float = 0.25,
     ) -> dict[str, SpreadCandidateQuote]:
         """
         Dynamic Cloud-Native Option Chain Scanner:
         Queries Alpaca `/v2/options/contracts` + `data.alpaca.markets/v1beta1/options/snapshots`
-        across the liquid watchlist to select fresh 0.18-0.30 Delta (or 0.12-0.18 Delta puts in
-        panic), 28-45 DTE, $5-wide credit spreads around current spot prices.
+        across the liquid watchlist. Strongly prefers standard monthly 3rd-Friday OPEX expirations
+        (21-55 DTE) for 5x-10x tighter spreads, and enforces single-leg bid-ask & natural-credit
+        viability so illiquid weeklies (like Dec 31) are skipped before order submission.
         """
         if not self._has_live_credentials():
             return dict(self.spread_candidates)
@@ -318,6 +330,7 @@ class AlpacaPaperClient:
         exp_lte = (today + timedelta(days=max_dte)).isoformat()
         target_tickers = [t.upper() for t in (tickers or DEFAULT_WATCHLIST)]
         discovered: dict[str, SpreadCandidateQuote] = {}
+        effective_leg_spread_cap = max_single_leg_spread + (0.10 if panic_regime else 0.0)
 
         with httpx.Client(timeout=10.0) as client:
             for sym in target_tickers:
@@ -339,7 +352,7 @@ class AlpacaPaperClient:
                     if not contracts:
                         continue
 
-                    # Pick expiration closest to 35 DTE
+                    # Group by expiration and strongly prefer standard monthly 3rd-Friday OPEX
                     by_exp: dict[str, list[dict[str, Any]]] = {}
                     for c in contracts:
                         exp = str(c.get("expiration_date") or "")
@@ -348,8 +361,10 @@ class AlpacaPaperClient:
                     if not by_exp:
                         continue
 
+                    monthly_exps = [e for e in by_exp.keys() if is_third_friday_opex(e)]
+                    exp_pool = monthly_exps if monthly_exps else list(by_exp.keys())
                     best_exp = min(
-                        by_exp.keys(),
+                        exp_pool,
                         key=lambda e: abs((datetime.strptime(e, "%Y-%m-%d").date() - today).days - 35),
                     )
                     dte = max(1, (datetime.strptime(best_exp, "%Y-%m-%d").date() - today).days)
@@ -422,6 +437,8 @@ class AlpacaPaperClient:
 
                         chosen: SpreadCandidateQuote | None = None
                         for short_leg in short_candidates:
+                            if short_leg.bid_ask_spread > effective_leg_spread_cap:
+                                continue
                             for width in preferred_widths:
                                 long_strike = (
                                     round(short_leg.strike_price - width, 2)
@@ -430,6 +447,11 @@ class AlpacaPaperClient:
                                 )
                                 long_leg = chain.get(long_strike)
                                 if long_leg is None:
+                                    continue
+                                if long_leg.bid_ask_spread > effective_leg_spread_cap:
+                                    continue
+                                natural_credit = round(short_leg.bid - long_leg.ask, 2)
+                                if natural_credit < round(width * min_natural_credit_ratio, 2):
                                     continue
                                 cand = SpreadCandidateQuote(
                                     ticker=sym,

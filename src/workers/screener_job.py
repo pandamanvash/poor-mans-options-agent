@@ -12,6 +12,7 @@ from src.config.portfolio_rules import (
     scale_vertical_contracts,
 )
 from src.db.models import ExecutionIntent, Trade
+from src.mcp_clients.alpaca import is_third_friday_opex
 from src.mcp_clients.robinhood import RobinhoodClient, SpreadCandidateQuote
 from src.mcp_clients.tradingview import TradingViewClient, VixRegime
 from src.mcp_clients.unusual_whales import UnusualWhalesClient
@@ -303,11 +304,13 @@ class ScreenerJob:
         ml_win_prob: float | None = None,
         max_bid_ask_spread_usd: float | None = None,
     ) -> ExecutionIntent | None:
-        if not (
-            PORTFOLIO_CONSTRAINTS.vertical_min_dte
-            <= candidate.dte
-            <= PORTFOLIO_CONSTRAINTS.vertical_max_dte
-        ):
+        min_dte_allowed = (
+            21 if is_third_friday_opex(candidate.expiration_date) else PORTFOLIO_CONSTRAINTS.vertical_min_dte
+        )
+        max_dte_allowed = (
+            55 if is_third_friday_opex(candidate.expiration_date) else PORTFOLIO_CONSTRAINTS.vertical_max_dte
+        )
+        if not (min_dte_allowed <= candidate.dte <= max_dte_allowed):
             return None
         spread_cap = (
             max_bid_ask_spread_usd
@@ -315,6 +318,17 @@ class ScreenerJob:
             else PORTFOLIO_CONSTRAINTS.max_bid_ask_spread_usd
         )
         if candidate.net_bid_ask_spread > spread_cap:
+            return None
+
+        # Pre-trade natural-credit & single-leg spread viability check (prevents unfillable illiquid chains)
+        leg_spread_cap = 0.55 if panic_regime else 0.45
+        if (
+            candidate.short_leg.bid_ask_spread > leg_spread_cap
+            or candidate.long_leg.bid_ask_spread > leg_spread_cap
+        ):
+            return None
+        natural_credit = round(candidate.short_leg.bid - candidate.long_leg.ask, 2)
+        if natural_credit < round(candidate.spread_width * 0.25, 2):
             return None
 
         try:

@@ -4,7 +4,7 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from src.mcp_clients.alpaca import AlpacaPaperClient, _extract_alpaca_uuid
+from src.mcp_clients.alpaca import AlpacaPaperClient, _extract_alpaca_uuid, is_third_friday_opex
 from src.mcp_clients.tradingview import TechnicalStructure, TradingViewClient
 
 
@@ -283,6 +283,68 @@ class TestLiveChainAndWalker(unittest.TestCase):
         self.assertGreaterEqual(spy_snap.iv_rank, 42.0)
         bc_ok, _ = uw.validate_bear_call_flow("SPY", min_iv_rank=42.0)
         self.assertTrue(bc_ok)
+
+    @patch("src.mcp_clients.alpaca.httpx.Client")
+    def test_scan_prefers_monthly_opex_and_skips_illiquid_natural_credit(self, mock_client_cls: MagicMock) -> None:
+        self.assertTrue(is_third_friday_opex("2026-12-18"))
+        self.assertTrue(is_third_friday_opex("2027-01-15"))
+        self.assertFalse(is_third_friday_opex("2026-12-31"))
+
+        mock_http = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_http
+
+        acct_resp = _FakeResp(
+            200,
+            {"account_number": "PA35XZXE8ZZE", "portfolio_value": "10000", "cash": "10000", "options_buying_power": "10000"},
+        )
+        # Provide both 2026-12-18 (monthly OPEX, 24 DTE) and 2026-12-31 (weekly, 37 DTE closer to 35)
+        contracts_resp = _FakeResp(
+            200,
+            {
+                "option_contracts": [
+                    {"symbol": "SPY261218C00750000", "type": "call", "strike_price": "750", "expiration_date": "2026-12-18", "open_interest": "15000"},
+                    {"symbol": "SPY261218C00755000", "type": "call", "strike_price": "755", "expiration_date": "2026-12-18", "open_interest": "12000"},
+                    {"symbol": "SPY261231C00750000", "type": "call", "strike_price": "750", "expiration_date": "2026-12-31", "open_interest": "400"},
+                    {"symbol": "SPY261231C00755000", "type": "call", "strike_price": "755", "expiration_date": "2026-12-31", "open_interest": "300"},
+                    # Illiquid put pair on Dec 18 (natural credit = 3.00 - 2.60 = 0.40 < 1.25)
+                    {"symbol": "SPY261218P00690000", "type": "put", "strike_price": "690", "expiration_date": "2026-12-18", "open_interest": "100"},
+                    {"symbol": "SPY261218P00685000", "type": "put", "strike_price": "685", "expiration_date": "2026-12-18", "open_interest": "100"},
+                ]
+            },
+        )
+        snaps_resp = _FakeResp(
+            200,
+            {
+                "snapshots": {
+                    "SPY261218C00750000": {"latestQuote": {"bp": 3.80, "ap": 3.95}, "greeks": {"delta": 0.24}, "impliedVolatility": 0.25},
+                    "SPY261218C00755000": {"latestQuote": {"bp": 2.05, "ap": 2.18}, "greeks": {"delta": 0.16}, "impliedVolatility": 0.24},
+                    "SPY261218P00690000": {"latestQuote": {"bp": 3.00, "ap": 4.50}, "greeks": {"delta": -0.24}, "impliedVolatility": 0.28},
+                    "SPY261218P00685000": {"latestQuote": {"bp": 1.60, "ap": 2.60}, "greeks": {"delta": -0.17}, "impliedVolatility": 0.29},
+                }
+            },
+        )
+
+        def fake_get(url: str, **kwargs):
+            if "/v2/account" in url:
+                return acct_resp
+            if "/v2/options/contracts" in url:
+                return contracts_resp
+            if "/v1beta1/options/snapshots" in url:
+                return snaps_resp
+            raise AssertionError(f"Unexpected GET {url}")
+
+        mock_http.get.side_effect = fake_get
+        client = AlpacaPaperClient(api_key="PKTEST", secret_key="SKTEST")
+        scanned = client.scan_live_option_chains(
+            tickers=["SPY"],
+            panic_regime=False,
+            reference_date=date(2026, 11, 24),
+        )
+        # Selected monthly 2026-12-18 over weekly 2026-12-31
+        self.assertIn("SPY_BEAR_CALL", scanned)
+        self.assertEqual(scanned["SPY_BEAR_CALL"].expiration_date, "2026-12-18")
+        # Rejected illiquid put spread ($1.50 leg spread & $0.40 natural credit)
+        self.assertNotIn("SPY_BULL_PUT", scanned)
 
 
 if __name__ == "__main__":
