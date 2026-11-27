@@ -160,6 +160,17 @@ class ExecutionWorker:
                 "long_strike": intent.long_strike,
             },
         )
+        strikes_label = f"${intent.short_strike:g}/${intent.long_strike:g}"
+        self.notifier.notify_order_submitted(
+            ticker=intent.ticker,
+            strategy=intent.strategy,
+            contracts=intent.contracts,
+            strikes=strikes_label,
+            expiration_date=intent.expiration_date,
+            limit_price=current_limit,
+            order_type="ENTRY_LIMIT",
+            order_id=order.order_id,
+        )
 
         # Smart Mid-Price Limit Walker (up to 4 steps)
         max_steps = 4
@@ -203,6 +214,16 @@ class ExecutionWorker:
                 "short_strike": intent.short_strike,
                 "long_strike": intent.long_strike,
             },
+        )
+        self.notifier.notify_position_filled(
+            ticker=intent.ticker,
+            strategy=intent.strategy,
+            contracts=intent.contracts,
+            strikes=f"${intent.short_strike:g}/${intent.long_strike:g}",
+            expiration_date=intent.expiration_date,
+            fill_price=fill_credit,
+            target_close_price=target_close_price,
+            order_id=order.order_id,
         )
 
         # Fetch TradingView structural anchor & ATR for intra-week risk management

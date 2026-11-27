@@ -16,7 +16,7 @@ from src.mcp_clients.unusual_whales import UnusualWhalesClient
 from src.ml_engine.kpi_tracker import StrategyKPITracker
 from src.ml_engine.model_trainer import WeeklyModelTrainer
 from src.ml_engine.trade_journal import TradeJournalLogger
-from src.notifications.notifier import Notifier
+from src.notifications.notifier import Notifier, format_management_strategy, format_spread_type
 from src.workers.execution_worker import ExecutionWorker
 from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInput
 from src.workers.screener_job import ScreenerJob
@@ -56,9 +56,16 @@ def _summarize_live_alpaca_spreads(live_positions: list[dict[str, Any]]) -> dict
         net_upl = round(sum(l["unrealized_pl"] for l in legs), 2)
         short_legs = [l for l in legs if l["qty"] < 0]
         contracts = abs(short_legs[0]["qty"]) if short_legs else abs(legs[0]["qty"])
-        strikes = "/".join(f"{l['strike']:g}" for l in sorted(legs, key=lambda x: x["strike"]))
-        sign = "+" if net_upl >= 0 else ""
-        spread_labels.append(f"{contracts}x {underlying} {mm_dd} {strikes}{cp} ({sign}${net_upl:,.0f})")
+        # Order strikes short/long for readability
+        ordered = sorted(legs, key=lambda x: x["strike"], reverse=(cp == "P"))
+        strikes = "/".join(f"${l['strike']:g}" for l in ordered)
+        spread_type = format_spread_type(cp)
+        mgmt = format_management_strategy(cp, compact=True)
+        sign = "+" if net_upl >= 0 else "-"
+        spread_labels.append(
+            f"• **{contracts}x {underlying}** `{mm_dd}` `{strikes}` — **{spread_type}** (`{sign}${abs(net_upl):,.2f}`)\n"
+            f"  ↳ *{mgmt}*"
+        )
 
     return {
         "active_spreads_count": len(groups),
@@ -66,6 +73,106 @@ def _summarize_live_alpaca_spreads(live_positions: list[dict[str, Any]]) -> dict
         "total_unrealized_pnl_usd": round(total_upl, 2),
         "spread_labels": spread_labels,
     }
+
+
+def _dispatch_live_order_alerts(
+    alpaca_client: AlpacaPaperClient,
+    notifier: Notifier,
+    state_path: Path = Path("data/notified_alpaca_orders.json"),
+) -> list[dict[str, Any]]:
+    """
+    Detect newly submitted or newly filled multi-leg orders on Alpaca (including orders placed
+    outside this container) and push Discord alerts with spread type and management strategy.
+    """
+    import re
+
+    if not alpaca_client._has_live_credentials():
+        return []
+
+    occ_re = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
+    recent_orders = alpaca_client.fetch_live_orders(status="all", limit=25)
+    if not recent_orders:
+        return []
+
+    seen: dict[str, str] = {}
+    cold_boot = not state_path.exists()
+    if not cold_boot:
+        try:
+            seen = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:
+            seen = {}
+
+    dispatched: list[dict[str, Any]] = []
+    for ord_obj in recent_orders:
+        if str(ord_obj.get("order_class") or "").lower() != "mleg":
+            continue
+        oid = str(ord_obj.get("id") or "")
+        status = str(ord_obj.get("status") or "").lower()
+        if not oid or not status:
+            continue
+
+        prev_status = seen.get(oid)
+        seen[oid] = status
+        if cold_boot or prev_status == status:
+            continue
+
+        # Only alert on initial submission (not walk replacements) or fills
+        is_new_order = status in ("new", "accepted") and not ord_obj.get("replaces")
+        is_filled = status == "filled"
+        if not (is_new_order or is_filled):
+            continue
+
+        legs = ord_obj.get("legs") or []
+        parsed_legs: list[tuple[str, str, str, float, str]] = []
+        for lg in legs:
+            m = occ_re.match(str(lg.get("symbol") or "").upper())
+            if m:
+                u, ymd, cp, k_raw = m.groups()
+                parsed_legs.append((u, f"20{ymd[:2]}-{ymd[2:4]}-{ymd[4:6]}", cp, int(k_raw) / 1000.0, str(lg.get("position_intent") or "")))
+        if not parsed_legs:
+            continue
+
+        ticker = parsed_legs[0][0]
+        exp_date = parsed_legs[0][1]
+        cp = parsed_legs[0][2]
+        strategy = "BULL_PUT_SPREAD" if cp == "P" else "BEAR_CALL_SPREAD"
+        ordered_strikes = sorted([p[3] for p in parsed_legs], reverse=(cp == "P"))
+        strikes = "/".join(f"${k:g}" for k in ordered_strikes)
+        qty = int(float(ord_obj.get("qty") or 1))
+        is_closing = any("close" in p[4].lower() for p in parsed_legs)
+
+        if is_filled:
+            fill_px = float(ord_obj.get("filled_avg_price") or ord_obj.get("limit_price") or 0.0)
+            notifier.notify_position_filled(
+                ticker=ticker,
+                strategy=strategy,
+                contracts=qty,
+                strikes=strikes,
+                expiration_date=exp_date,
+                fill_price=fill_px,
+                is_closing=is_closing,
+                order_id=oid,
+            )
+            dispatched.append({"event": "filled", "order_id": oid, "ticker": ticker, "strikes": strikes})
+        elif is_new_order:
+            lim_px = float(ord_obj.get("limit_price") or 0.0)
+            notifier.notify_order_submitted(
+                ticker=ticker,
+                strategy=strategy,
+                contracts=qty,
+                strikes=strikes,
+                expiration_date=exp_date,
+                limit_price=lim_px,
+                order_type="CLOSING_LIMIT" if is_closing else "ENTRY_LIMIT",
+                order_id=oid,
+            )
+            dispatched.append({"event": "submitted", "order_id": oid, "ticker": ticker, "strikes": strikes})
+
+    # Keep the state file compact (latest 100 order IDs)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    trimmed = dict(list(seen.items())[-100:])
+    state_path.write_text(json.dumps(trimmed, indent=2), encoding="utf-8")
+    return dispatched
 
 
 def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any]:
@@ -208,6 +315,8 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         journal = TradeJournalLogger()
         journal.record_trades_from_session(session=session)
 
+    notifier = Notifier()
+    live_order_alerts = _dispatch_live_order_alerts(alpaca_client, notifier)
     live_positions = alpaca_client.fetch_live_positions() if alpaca_client._has_live_credentials() else []
     live_book = _summarize_live_alpaca_spreads(live_positions)
     active_spreads_count = (
@@ -229,6 +338,7 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
             "rejected": screen_res.get("rejected_candidates", []),
         },
         "live_alpaca_book": live_book,
+        "live_order_alerts": live_order_alerts,
         "walked_orders": walked_orders,
         "paper_trades_active": filled_trades,
         "monitor_decisions": monitor_checks,
@@ -247,17 +357,18 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     cycle_payload["trade_journal_summary"] = journal_report
 
     if mode in ("screener", "friday_ml_retrain"):
-        upl_sign = "+" if live_book["total_unrealized_pnl_usd"] >= 0 else ""
+        upl_val = live_book["total_unrealized_pnl_usd"]
+        upl_str = f"+${upl_val:,.2f}" if upl_val >= 0 else f"-${abs(upl_val):,.2f}"
         positions_text = (
-            " | ".join(live_book["spread_labels"][:6])
+            "\n".join(live_book["spread_labels"][:6])
             if live_book["spread_labels"]
             else "None"
         )
-        Notifier().send_alert(
+        notifier.send_alert(
             title=f"Options Agent ({mode.upper()}) — {screen_res['vix_regime']}",
             message=(
                 f"Qualifying Trades: {screen_res['queued_intents_count']} | "
-                f"Open Spreads: {active_spreads_count} ({upl_sign}${live_book['total_unrealized_pnl_usd']:,.2f} uPnL) | "
+                f"Open Spreads: {active_spreads_count} ({upl_str} uPnL) | "
                 f"Portfolio Rating: {journal_report['overall_rating_grade']} ({journal_report['overall_performance_score']}/100)"
             ),
             metadata={
@@ -266,8 +377,8 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
                 "active_spreads": active_spreads_count,
                 "equity": f"${exec_broker_client.total_value:,.2f}",
                 "buying_power": f"${exec_broker_client.buying_power:,.2f}",
-                "open_positions": positions_text,
                 "rating": journal_report["overall_rating_grade"],
+                "open_positions": positions_text,
             },
         )
 

@@ -359,8 +359,62 @@ class TestLiveChainAndWalker(unittest.TestCase):
         self.assertEqual(summary["active_spreads_count"], 2)
         self.assertEqual(summary["open_legs_count"], 4)
         self.assertAlmostEqual(summary["total_unrealized_pnl_usd"], -74.0, places=2)
-        self.assertTrue(any("AMZN 12/31 225/230P" in s for s in summary["spread_labels"]))
-        self.assertTrue(any("GLD 12/31 340/345C" in s for s in summary["spread_labels"]))
+        self.assertTrue(any("Bull Put Credit Spread" in s and "$230/$225" in s and "+$26.00" in s for s in summary["spread_labels"]))
+        self.assertTrue(any("Bear Call Credit Spread" in s and "$340/$345" in s and "-$100.00" in s for s in summary["spread_labels"]))
+        self.assertTrue(all("50% GTC TP" in s for s in summary["spread_labels"]))
+
+    def test_dispatch_live_order_alerts_notifies_on_new_and_filled(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from src.notifications.notifier import Notifier
+        from src.workers.scheduled_paper_check import _dispatch_live_order_alerts
+
+        fake_alpaca = MagicMock()
+        fake_alpaca._has_live_credentials.return_value = True
+        notifier = Notifier(webhook_url="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "notified.json"
+            # Cold boot seeds without spamming
+            fake_alpaca.fetch_live_orders.return_value = [
+                {"id": "old-1", "order_class": "mleg", "status": "filled", "qty": "2", "filled_avg_price": "-1.50", "legs": []}
+            ]
+            self.assertEqual(_dispatch_live_order_alerts(fake_alpaca, notifier, state_path=state_file), [])
+            self.assertEqual(len(notifier.sent_messages), 0)
+
+            # New order submitted + another filled -> 2 Discord alerts with spread type & management strategy
+            fake_alpaca.fetch_live_orders.return_value = [
+                {
+                    "id": "ord-new-1",
+                    "order_class": "mleg",
+                    "status": "new",
+                    "replaces": None,
+                    "qty": "2",
+                    "limit_price": "-1.65",
+                    "legs": [
+                        {"symbol": "SPY261218P00700000", "position_intent": "sell_to_open"},
+                        {"symbol": "SPY261218P00695000", "position_intent": "buy_to_open"},
+                    ],
+                },
+                {
+                    "id": "ord-fill-2",
+                    "order_class": "mleg",
+                    "status": "filled",
+                    "qty": "3",
+                    "filled_avg_price": "-1.40",
+                    "legs": [
+                        {"symbol": "AAPL261218C00360000", "position_intent": "sell_to_open"},
+                        {"symbol": "AAPL261218C00365000", "position_intent": "buy_to_open"},
+                    ],
+                },
+            ]
+            events = _dispatch_live_order_alerts(fake_alpaca, notifier, state_path=state_file)
+            self.assertEqual(len(events), 2)
+            self.assertEqual(len(notifier.sent_messages), 2)
+            titles = [m["title"] for m in notifier.sent_messages]
+            self.assertTrue(any("ORDER SUBMITTED" in t and "Bull Put Credit Spread" in t for t in titles))
+            self.assertTrue(any("POSITION FILLED" in t and "Bear Call Credit Spread" in t for t in titles))
+            self.assertTrue(all("management_strategy" in m["metadata"] for m in notifier.sent_messages))
 
 
 if __name__ == "__main__":
