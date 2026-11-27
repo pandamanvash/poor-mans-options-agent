@@ -416,6 +416,73 @@ class TestLiveChainAndWalker(unittest.TestCase):
             self.assertTrue(any("POSITION FILLED" in t and "Bear Call Credit Spread" in t for t in titles))
             self.assertTrue(all("management_strategy" in m["metadata"] for m in notifier.sent_messages))
 
+    @patch("src.ml_engine.gemini_fill_advisor.httpx.Client")
+    def test_gemini_fill_advisor_enforces_safety_floor_on_stalled_order(self, mock_http_cls: MagicMock) -> None:
+        from src.ml_engine.gemini_fill_advisor import GeminiFillAdvisor
+
+        mock_http = MagicMock()
+        mock_http_cls.return_value.__enter__.return_value = mock_http
+        # Gemini recommends $1.25 natural credit on 2x $5 spread (valid: 50% profit = $125 >= $100)
+        mock_http.post.return_value = _FakeResp(
+            200,
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"action": "REPLACE", "recommended_credit": 1.25, "rationale": "Cross natural credit to fill."}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+        advisor = GeminiFillAdvisor(api_key="AIzaTestKey", model="gemini-2.5-flash-lite")
+        res = advisor.advise_stalled_order(
+            legs_desc="AMZN261231P00230000/AMZN261231P00225000",
+            contracts=2,
+            spread_width=5.0,
+            current_limit_credit=1.50,
+            live_mid_credit=1.65,
+            live_natural_credit=1.25,
+            min_credit_floor=1.50,
+            age_minutes=18.5,
+        )
+        self.assertEqual(res["action"], "REPLACE")
+        self.assertEqual(res["recommended_credit"], 1.25)
+
+        # If Gemini recommends an unsafe $0.75 credit (< $1.15 hard floor), Python overrides to HOLD
+        mock_http.post.return_value = _FakeResp(
+            200,
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"action": "REPLACE", "recommended_credit": 0.75, "rationale": "Force fill."}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+        res_bad = advisor.advise_stalled_order(
+            legs_desc="AMZN261231P00230000/AMZN261231P00225000",
+            contracts=2,
+            spread_width=5.0,
+            current_limit_credit=1.50,
+            live_mid_credit=1.65,
+            live_natural_credit=0.75,
+            min_credit_floor=1.50,
+            age_minutes=18.5,
+        )
+        self.assertEqual(res_bad["action"], "HOLD")
+        self.assertIsNone(res_bad["recommended_credit"])
+
 
 if __name__ == "__main__":
     unittest.main()

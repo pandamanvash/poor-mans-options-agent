@@ -565,38 +565,108 @@ class AlpacaPaperClient:
                     )
 
                     current_credit = round(abs(limit_val), 2)
-                    if current_credit <= target_credit:
-                        continue
-                    new_credit = round(max(target_credit, current_credit - step_decrement), 2)
-                    if new_credit < min_credit_floor or new_credit >= current_credit:
-                        continue
-
                     raw_order_id = str(ord_obj.get("id") or "")
-                    patch_resp = client.patch(
-                        f"{self.base_url}/v2/orders/{raw_order_id}",
-                        headers=self._headers(),
-                        json={"limit_price": f"{-new_credit:.2f}"},
+                    age_minutes = 0.0
+                    if created_at_str:
+                        try:
+                            created_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                            age_minutes = (now_utc - created_dt).total_seconds() / 60.0
+                        except ValueError:
+                            pass
+
+                    # Standard mechanical walk toward target_credit (bounded by min_credit_floor)
+                    new_credit = round(max(target_credit, current_credit - step_decrement), 2)
+                    can_mechanical_walk = (
+                        current_credit > target_credit
+                        and new_credit >= min_credit_floor
+                        and new_credit < current_credit
                     )
-                    if patch_resp.status_code in (200, 201):
-                        replaced = patch_resp.json()
-                        walked.append(
-                            {
-                                "old_order_id": raw_order_id,
-                                "new_order_id": replaced.get("id", raw_order_id),
-                                "legs": f"{sell_sym}/{buy_sym}",
-                                "old_credit": current_credit,
-                                "new_credit": new_credit,
-                                "live_mid_credit": live_mid_credit,
-                                "min_credit_floor": min_credit_floor,
-                            }
+
+                    if can_mechanical_walk:
+                        patch_resp = client.patch(
+                            f"{self.base_url}/v2/orders/{raw_order_id}",
+                            headers=self._headers(),
+                            json={"limit_price": f"{-new_credit:.2f}"},
                         )
-                    else:
-                        logger.info(
-                            "Alpaca PATCH /v2/orders/%s response (%s): %s",
-                            raw_order_id,
-                            patch_resp.status_code,
-                            patch_resp.text[:200],
-                        )
+                        if patch_resp.status_code in (200, 201):
+                            replaced = patch_resp.json()
+                            walked.append(
+                                {
+                                    "old_order_id": raw_order_id,
+                                    "new_order_id": replaced.get("id", raw_order_id),
+                                    "legs": f"{sell_sym}/{buy_sym}",
+                                    "old_credit": current_credit,
+                                    "new_credit": new_credit,
+                                    "live_mid_credit": live_mid_credit,
+                                    "live_natural_credit": live_natural_credit,
+                                    "min_credit_floor": min_credit_floor,
+                                    "ai_assisted": False,
+                                }
+                            )
+                        else:
+                            logger.info(
+                                "Alpaca PATCH /v2/orders/%s response (%s): %s",
+                                raw_order_id,
+                                patch_resp.status_code,
+                                patch_resp.text[:200],
+                            )
+                    elif age_minutes >= 15.0:
+                        # Stalled >= 15 minutes without filling: consult Google AI Studio (low effort)
+                        from src.ml_engine.gemini_fill_advisor import GeminiFillAdvisor
+
+                        advisor = GeminiFillAdvisor()
+                        if advisor.is_configured():
+                            qty = int(float(ord_obj.get("qty") or 1))
+                            advice = advisor.advise_stalled_order(
+                                legs_desc=f"{sell_sym}/{buy_sym}",
+                                contracts=qty,
+                                spread_width=spread_width,
+                                current_limit_credit=current_credit,
+                                live_mid_credit=live_mid_credit,
+                                live_natural_credit=live_natural_credit,
+                                min_credit_floor=min_credit_floor,
+                                age_minutes=age_minutes,
+                            )
+                            if advice["action"] == "REPLACE" and advice.get("recommended_credit"):
+                                ai_credit = float(advice["recommended_credit"])
+                                patch_resp = client.patch(
+                                    f"{self.base_url}/v2/orders/{raw_order_id}",
+                                    headers=self._headers(),
+                                    json={"limit_price": f"{-ai_credit:.2f}"},
+                                )
+                                if patch_resp.status_code in (200, 201):
+                                    replaced = patch_resp.json()
+                                    walked.append(
+                                        {
+                                            "old_order_id": raw_order_id,
+                                            "new_order_id": replaced.get("id", raw_order_id),
+                                            "legs": f"{sell_sym}/{buy_sym}",
+                                            "old_credit": current_credit,
+                                            "new_credit": ai_credit,
+                                            "live_mid_credit": live_mid_credit,
+                                            "live_natural_credit": live_natural_credit,
+                                            "min_credit_floor": min_credit_floor,
+                                            "ai_assisted": True,
+                                            "ai_rationale": advice.get("rationale", ""),
+                                        }
+                                    )
+                            elif advice["action"] == "CANCEL":
+                                del_resp = client.delete(
+                                    f"{self.base_url}/v2/orders/{raw_order_id}",
+                                    headers=self._headers(),
+                                )
+                                if del_resp.status_code in (200, 204):
+                                    walked.append(
+                                        {
+                                            "old_order_id": raw_order_id,
+                                            "action": "CANCELLED_BY_AI",
+                                            "legs": f"{sell_sym}/{buy_sym}",
+                                            "old_credit": current_credit,
+                                            "live_natural_credit": live_natural_credit,
+                                            "ai_assisted": True,
+                                            "ai_rationale": advice.get("rationale", ""),
+                                        }
+                                    )
                 except Exception as exc:
                     logger.info("Alpaca live order walk note: %s", exc)
 

@@ -64,6 +64,12 @@ class Settings(BaseModel):
     webhook_notification_url: str = Field(
         default_factory=lambda: os.getenv("WEBHOOK_NOTIFICATION_URL", "")
     )
+    gemini_api_key: str = Field(
+        default_factory=lambda: os.getenv("GEMINI_API_KEY", "")
+    )
+    gemini_model: str = Field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    )
     risk_thresholds_path: Path = Field(
         default=Path("config/risk_thresholds.json"),
     )
