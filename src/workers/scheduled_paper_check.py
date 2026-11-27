@@ -22,6 +22,52 @@ from src.workers.monitor_worker import PositionMonitorWorker, PositionStressInpu
 from src.workers.screener_job import ScreenerJob
 
 
+def _summarize_live_alpaca_spreads(live_positions: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Group raw Alpaca option leg positions (from GET /v2/positions) into vertical spreads
+    by (underlying, expiration_yymmdd, put_or_call) so Discord alerts and logs reflect
+    the real open book on Alpaca rather than ephemeral container-local SQLite rows.
+    """
+    import re
+
+    occ_re = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    total_upl = 0.0
+    for pos in live_positions:
+        sym = str(pos.get("symbol") or "").upper()
+        upl = float(pos.get("unrealized_pl") or 0.0)
+        total_upl += upl
+        m = occ_re.match(sym)
+        if m:
+            underlying, yymmdd, cp, strike_raw = m.groups()
+            key = (underlying, yymmdd, cp)
+            groups.setdefault(key, []).append(
+                {
+                    "symbol": sym,
+                    "strike": int(strike_raw) / 1000.0,
+                    "qty": int(float(pos.get("qty") or 0)),
+                    "unrealized_pl": upl,
+                }
+            )
+
+    spread_labels: list[str] = []
+    for (underlying, yymmdd, cp), legs in sorted(groups.items()):
+        mm_dd = f"{yymmdd[2:4]}/{yymmdd[4:6]}"
+        net_upl = round(sum(l["unrealized_pl"] for l in legs), 2)
+        short_legs = [l for l in legs if l["qty"] < 0]
+        contracts = abs(short_legs[0]["qty"]) if short_legs else abs(legs[0]["qty"])
+        strikes = "/".join(f"{l['strike']:g}" for l in sorted(legs, key=lambda x: x["strike"]))
+        sign = "+" if net_upl >= 0 else ""
+        spread_labels.append(f"{contracts}x {underlying} {mm_dd} {strikes}{cp} ({sign}${net_upl:,.0f})")
+
+    return {
+        "active_spreads_count": len(groups),
+        "open_legs_count": len(live_positions),
+        "total_unrealized_pnl_usd": round(total_upl, 2),
+        "spread_labels": spread_labels,
+    }
+
+
 def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any]:
     """
     Executes a scheduled local paper-trading cycle against the default Robinhood 'MCP' account (512500422)
@@ -162,6 +208,14 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
         journal = TradeJournalLogger()
         journal.record_trades_from_session(session=session)
 
+    live_positions = alpaca_client.fetch_live_positions() if alpaca_client._has_live_credentials() else []
+    live_book = _summarize_live_alpaca_spreads(live_positions)
+    active_spreads_count = (
+        live_book["active_spreads_count"]
+        if alpaca_client._has_live_credentials()
+        else len(filled_trades)
+    )
+
     cycle_payload = {
         "timestamp_utc": now_iso,
         "cycle_mode": mode,
@@ -174,6 +228,7 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
             "queued": screen_res.get("queued_intents", []),
             "rejected": screen_res.get("rejected_candidates", []),
         },
+        "live_alpaca_book": live_book,
         "walked_orders": walked_orders,
         "paper_trades_active": filled_trades,
         "monitor_decisions": monitor_checks,
@@ -192,16 +247,26 @@ def run_scheduled_paper_cycle(mode: str = "monitor_and_screen") -> dict[str, Any
     cycle_payload["trade_journal_summary"] = journal_report
 
     if mode in ("screener", "friday_ml_retrain"):
+        upl_sign = "+" if live_book["total_unrealized_pnl_usd"] >= 0 else ""
+        positions_text = (
+            " | ".join(live_book["spread_labels"][:6])
+            if live_book["spread_labels"]
+            else "None"
+        )
         Notifier().send_alert(
             title=f"Options Agent ({mode.upper()}) — {screen_res['vix_regime']}",
             message=(
                 f"Qualifying Trades: {screen_res['queued_intents_count']} | "
+                f"Open Spreads: {active_spreads_count} ({upl_sign}${live_book['total_unrealized_pnl_usd']:,.2f} uPnL) | "
                 f"Portfolio Rating: {journal_report['overall_rating_grade']} ({journal_report['overall_performance_score']}/100)"
             ),
             metadata={
-                "broker": "alpaca_paper (PA35XZXE8ZZE)",
+                "broker": f"alpaca_paper ({exec_broker_client.account_number})",
                 "vix_regime": screen_res["vix_regime"],
-                "active_spreads": len(filled_trades),
+                "active_spreads": active_spreads_count,
+                "equity": f"${exec_broker_client.total_value:,.2f}",
+                "buying_power": f"${exec_broker_client.buying_power:,.2f}",
+                "open_positions": positions_text,
                 "rating": journal_report["overall_rating_grade"],
             },
         )

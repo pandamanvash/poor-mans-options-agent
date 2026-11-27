@@ -346,6 +346,22 @@ class TestLiveChainAndWalker(unittest.TestCase):
         # Rejected illiquid put spread ($1.50 leg spread & $0.40 natural credit)
         self.assertNotIn("SPY_BULL_PUT", scanned)
 
+    def test_summarize_live_alpaca_spreads_groups_legs_for_discord(self) -> None:
+        from src.workers.scheduled_paper_check import _summarize_live_alpaca_spreads
+
+        positions = [
+            {"symbol": "AMZN261231P00230000", "qty": "-2", "unrealized_pl": "800"},
+            {"symbol": "AMZN261231P00225000", "qty": "2", "unrealized_pl": "-774"},
+            {"symbol": "GLD261231C00340000", "qty": "-2", "unrealized_pl": "-20"},
+            {"symbol": "GLD261231C00345000", "qty": "2", "unrealized_pl": "-80"},
+        ]
+        summary = _summarize_live_alpaca_spreads(positions)
+        self.assertEqual(summary["active_spreads_count"], 2)
+        self.assertEqual(summary["open_legs_count"], 4)
+        self.assertAlmostEqual(summary["total_unrealized_pnl_usd"], -74.0, places=2)
+        self.assertTrue(any("AMZN 12/31 225/230P" in s for s in summary["spread_labels"]))
+        self.assertTrue(any("GLD 12/31 340/345C" in s for s in summary["spread_labels"]))
+
 
 if __name__ == "__main__":
     unittest.main()
